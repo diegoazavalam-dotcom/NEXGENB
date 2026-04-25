@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZoLe | Reportes Avanzados</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    
+    <style>
+        body { background: #000205; color: #a1a1aa; font-family: 'Inter', sans-serif; overflow-x: hidden; }
+        
+        .glass-panel { 
+            background: rgba(13, 17, 23, 0.7); 
+            backdrop-filter: blur(12px); 
+            border: 1px solid rgba(255, 255, 255, 0.08); 
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        .glass-nav { 
+            background: rgba(255, 255, 255, 0.03); 
+            border: 1px solid rgba(255, 255, 255, 0.05); 
+            backdrop-filter: blur(5px); 
+        }
+
+        /* Optimización para multiselección sin necesidad de Ctrl */
+        #lista-sensores-multiselect option {
+            padding: 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        #lista-sensores-multiselect option:hover {
+            background: rgba(255,255,255,0.05);
+        }
+        #lista-sensores-multiselect option:checked {
+            background: linear-gradient(90deg, #2563eb, #1d4ed8) !important;
+            color: white;
+            font-weight: bold;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+    </style>
+</head>
+<body class="p-6 selection:bg-blue-500 selection:text-white">
+
+    <div class="grid grid-cols-1 md:grid-cols-3 items-center mb-10 gap-6">
+        <div class="flex items-center justify-start gap-6">
+            <div class="relative group">
+                <div class="absolute inset-0 bg-blue-600/20 blur-[60px] rounded-full scale-110"></div>
+                <img src="{{ url_for('static', filename='img/zole_logo.png') }}" alt="ZoLe Logo" class="relative h-28 w-auto object-contain">
+            </div>
+            <div class="flex flex-col">
+                <h1 class="text-3xl font-black text-white tracking-tighter italic leading-none uppercase">ZoLe. <span class="text-blue-500">Analytics</span></h1>
+                <p class="text-[8px] font-bold text-gray-600 tracking-[0.5em] uppercase mt-1">Intelligence Engine v7.5</p>
+            </div>
+        </div>
+
+        <div class="flex justify-center"></div>
+
+        <div class="flex justify-end items-center gap-3">
+            <nav class="flex items-center gap-1 glass-nav p-2 rounded-2xl border-white/10 shadow-2xl">
+                <button class="p-2.5 rounded-xl opacity-30 cursor-not-allowed" title="Usuarios">🛡️</button>
+                
+                <a href="/" class="p-2.5 bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white rounded-xl transition-all flex items-center justify-center border border-blue-500/20" title="Volver al SCADA">🏠</a>
+                
+                <a href="/reports" class="p-2.5 bg-white/10 text-white rounded-xl transition-all shadow-inner" title="Analítica">📊</a>
+                
+                <div class="w-[1px] h-6 bg-white/10 mx-1"></div>
+                
+                <button class="px-4 py-2 bg-green-500/5 text-green-500/30 rounded-xl text-[9px] font-black uppercase cursor-not-allowed">Nodo +</button>
+                <button class="p-2.5 opacity-30 cursor-not-allowed" title="Backup">💾</button>
+                <button class="p-2.5 opacity-30 cursor-not-allowed" title="Auditoría">🔍</button>
+                <button class="px-4 py-2 bg-blue-500/5 text-blue-400/30 rounded-xl text-[9px] font-black uppercase cursor-not-allowed">Layout</button>
+                <button onclick="AuthWidget.logout()" class="ml-2 px-4 py-2 bg-red-600/20 hover:bg-red-600 text-white rounded-xl text-[9px] font-black uppercase transition-all">Salir</button>
+            </nav>
+        </div>
+    </div>
+
+    <main id="seccion-reportes" class="max-w-7xl mx-auto space-y-8 animate-in fade-in duration-700">
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
+            
+            <div class="lg:col-span-1 space-y-6">
+                <div class="glass-panel p-6 rounded-[2.5rem] border-white/10 sticky top-6">
+                    <label class="text-[10px] text-blue-400 font-black uppercase tracking-[0.2em] block mb-4">Configurar Análisis</label>
+                    <div class="space-y-4">
+                        <div class="space-y-1">
+                            <label class="text-[8px] text-gray-500 uppercase font-black ml-1">Fecha Inicio</label>
+                            <input type="datetime-local" id="rep-inicio" class="w-full bg-black/40 border border-white/10 text-white p-4 rounded-2xl text-xs outline-none focus:border-blue-500 font-mono">
+                        </div>
+                        <div class="space-y-1">
+                            <label class="text-[8px] text-gray-500 uppercase font-black ml-1">Fecha Fin</label>
+                            <input type="datetime-local" id="rep-fin" class="w-full bg-black/40 border border-white/10 text-white p-4 rounded-2xl text-xs outline-none focus:border-blue-500 font-mono">
+                        </div>
+                        
+                        <div class="pt-4">
+                            <label class="text-[10px] text-gray-500 font-black uppercase tracking-[0.2em] block mb-3">Selección de Activos (Múltiple)</label>
+                            <select id="lista-sensores-multiselect" multiple class="w-full bg-black/40 border border-white/5 rounded-2xl p-4 h-72 text-xs text-gray-300 custom-scrollbar outline-none focus:border-blue-500 shadow-inner">
+                                </select>
+                            <p class="text-[8px] text-blue-500/60 mt-3 text-center uppercase font-bold tracking-tighter bg-blue-500/5 py-2 rounded-lg border border-blue-500/10">Mantén Ctrl o Cmd para comparar varios</p>
+                        </div>
+
+                        <button id="rep-btn-generar" onclick="ReportsWidget.generarReporte()" class="w-full mt-2 bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-2xl text-[11px] uppercase tracking-widest shadow-xl shadow-blue-900/30 transition-all active:scale-95">
+                            Correlacionar Datos
+                        </button>
+                        
+                        <div class="grid grid-cols-2 gap-2 mt-4">
+                            <button onclick="window.location.href='/api/exportar/incidentes'" class="w-full text-[9px] font-black text-red-400 bg-red-400/10 border border-red-400/20 py-3 rounded-xl hover:bg-red-500 hover:text-white transition-all shadow-lg uppercase">Log Fallas</button>
+                            <button onclick="ReportsWidget.exportarExcelMasivo()" class="w-full text-[9px] font-black text-green-500 bg-green-500/10 border border-green-500/20 py-3 rounded-xl hover:bg-green-500 hover:text-white transition-all shadow-lg uppercase">Master Excel</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="lg:col-span-3 space-y-8">
+                
+                <div class="glass-panel rounded-[2.5rem] p-8 border-white/5">
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 class="text-xs font-black text-white uppercase italic tracking-widest flex items-center gap-3">
+                            <span class="w-2 h-2 rounded-full bg-blue-500 animate-pulse shadow-[0_0_10px_#3b82f6]"></span> Tendencia Multivariable
+                        </h3>
+                    </div>
+                    <div class="h-[480px] bg-[#05070a] rounded-3xl p-4 border border-white/5 shadow-inner relative flex items-center justify-center">
+                        <div id="chart-placeholder" class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                            <svg class="w-16 h-16 mb-4 text-blue-500/30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                            <p class="text-[10px] font-black uppercase tracking-[0.3em] text-gray-500">Selecciona activos y haz click en Correlacionar</p>
+                        </div>
+                        <canvas id="chart-reporte-canvas" class="relative z-10 hidden"></canvas>
+                    </div>
+                </div>
+
+                <div class="glass-panel rounded-[2.5rem] p-8 border-white/5">
+                    <h3 class="text-xs font-black text-white uppercase italic tracking-widest flex items-center gap-3 mb-6 border-b border-white/5 pb-4">
+                        <span class="w-2 h-2 rounded-full bg-purple-500 animate-pulse shadow-[0_0_10px_#a855f7]"></span> Analítica de Comportamiento
+                    </h3>
+                    
+                    <div id="contenedor-analiticas-reporte" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                        <div class="text-center p-8 opacity-30 border-2 border-dashed border-white/10 rounded-2xl">
+                            <p class="text-[10px] font-black uppercase tracking-[0.3em] text-gray-400">Esperando correlación de datos...</p>
+                        </div>
+                    </div>
+                    
+                    <div id="contenedor-insights" class="w-full"></div>
+                </div>
+
+            </div>
+        </div>
+        <div class="h-20"></div>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/auth_widget.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/reports_widget.js') }}"></script>
+    
+    <script>
+        window.onload = async () => {
+            // Verificar sesión antes de mostrar datos
+            await AuthWidget.verificarAcceso();
+            
+            // Inicializar el widget de reportes
+            if (typeof ReportsWidget !== 'undefined') {
+                ReportsWidget.init();
+            }
+        };
+    </script>
+</body>
+</html>

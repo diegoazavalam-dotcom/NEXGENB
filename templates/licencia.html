@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SCADA - Acceso Bloqueado</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Un pequeño efecto de escaneo para darle el toque de "Terminal Industrial" */
+        .scanline {
+            width: 100%;
+            height: 100px;
+            background: linear-gradient(0deg, rgba(0,0,0,0) 0%, rgba(255,0,0,0.1) 50%, rgba(0,0,0,0) 100%);
+            opacity: 0.1;
+            position: absolute;
+            bottom: 100%;
+            animation: scanline 8s linear infinite;
+            pointer-events: none;
+        }
+        @keyframes scanline {
+            0% { bottom: 100%; }
+            100% { bottom: -100px; }
+        }
+    </style>
+</head>
+<body class="bg-[#0a0a0a] text-gray-300 h-screen flex items-center justify-center font-sans overflow-hidden relative">
+    
+    <div class="scanline"></div>
+
+    <div class="max-w-lg w-full bg-black/50 border border-red-500/30 rounded-xl shadow-[0_0_50px_rgba(239,68,68,0.15)] p-8 relative backdrop-blur-sm">
+        
+        <div class="flex justify-center mb-6">
+            <div class="bg-red-500/10 p-4 rounded-full border border-red-500/50">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                </svg>
+            </div>
+        </div>
+
+        <h1 class="text-3xl font-black text-center text-white tracking-wider mb-2 uppercase">Sistema Bloqueado</h1>
+        
+        <div class="bg-red-500/20 border-l-4 border-red-500 p-4 mb-6 rounded-r">
+            <p class="text-red-400 font-mono text-sm text-center font-bold">
+                {{ mensaje }}
+            </p>
+        </div>
+
+        <p class="text-center text-gray-400 text-sm mb-8">
+            El motor de adquisición de datos (PLC) sigue operando en segundo plano, pero la interfaz HMI y la extracción de datos han sido suspendidas. Contacte a su proveedor para renovar su suscripción.
+        </p>
+
+        <div class="border border-gray-800 bg-gray-900/50 rounded-lg p-5">
+            <h3 class="text-xs text-gray-500 uppercase tracking-widest font-bold mb-3">Actualizar Credenciales</h3>
+            
+            <form action="/upload_license" method="POST" enctype="multipart/form-data" class="flex flex-col gap-3">
+                <input type="file" name="license_file" accept=".key" required
+                    class="block w-full text-sm text-gray-400
+                    file:mr-4 file:py-2 file:px-4
+                    file:rounded-md file:border-0
+                    file:text-sm file:font-semibold
+                    file:bg-blue-500/10 file:text-blue-500
+                    hover:file:bg-blue-500/20 cursor-pointer">
+                
+                <button type="submit" 
+                    class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded transition-colors mt-2 uppercase tracking-wide text-sm">
+                    Verificar y Desbloquear
+                </button>
+            </form>
+        </div>
+        
+        <div class="mt-6 text-center">
+            <span class="text-[10px] text-gray-600 font-mono uppercase">Nexgen Industrial 4.0 © 2026</span>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexgen Core - God Mode</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen flex items-center justify-center p-4">
+
+    <div id="login-modal" class="bg-gray-800 p-8 rounded-lg shadow-2xl w-full max-w-md border border-gray-700">
+        <h2 class="text-2xl font-bold mb-4 text-blue-400">🛡️ Acceso Integrador</h2>
+        <input type="password" id="token-input" placeholder="Token Maestro" class="w-full bg-gray-900 border border-gray-600 rounded p-2 mb-4 text-white focus:outline-none focus:border-blue-500">
+        <button onclick="autenticar()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition">Entrar al Core</button>
+    </div>
+
+    <div id="admin-panel" class="hidden w-full max-w-4xl bg-gray-800 rounded-lg shadow-2xl border border-gray-700 p-6">
+        <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+            <h1 class="text-3xl font-bold text-blue-400">⚙️ Configuración Maestra del Sistema</h1>
+            <button onclick="guardarConfig()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded transition">💾 Guardar y Aplicar en Caliente</button>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div class="bg-gray-900 p-4 rounded border border-gray-700">
+                <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-2">Hardware PLC (Siemens)</h3>
+                <label class="block text-sm text-gray-400 mb-1">Dirección IP</label>
+                <input type="text" id="plc-ip" class="w-full bg-gray-800 border border-gray-600 rounded p-2 mb-4 text-white">
+                
+                <div class="flex gap-4 mb-4">
+                    <div class="w-1/2">
+                        <label class="block text-sm text-gray-400 mb-1">Rack</label>
+                        <input type="number" id="plc-rack" class="w-full bg-gray-800 border border-gray-600 rounded p-2 text-white">
+                    </div>
+                    <div class="w-1/2">
+                        <label class="block text-sm text-gray-400 mb-1">Slot</label>
+                        <input type="number" id="plc-slot" class="w-full bg-gray-800 border border-gray-600 rounded p-2 text-white">
+                    </div>
+                </div>
+                
+                <label class="flex items-center space-x-2 cursor-pointer">
+                    <input type="checkbox" id="plc-simulacion" class="w-5 h-5 accent-blue-500">
+                    <span class="text-gray-300">Activar Modo Simulación (Sin PLC físico)</span>
+                </label>
+            </div>
+
+            <div class="bg-gray-900 p-4 rounded border border-gray-700">
+                <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-2">Base de Datos & Motor</h3>
+                
+                <label class="block text-sm text-gray-400 mb-1">Retención Datos Principales (Días)</label>
+                <input type="number" id="db-principal" class="w-full bg-gray-800 border border-gray-600 rounded p-2 mb-4 text-white">
+                
+                <label class="block text-sm text-gray-400 mb-1">Retención Archivo Histórico (Días)</label>
+                <input type="number" id="db-archivo" class="w-full bg-gray-800 border border-gray-600 rounded p-2 mb-4 text-white">
+
+                <label class="block text-sm text-gray-400 mb-1">Velocidad de Polling (ms)</label>
+                <input type="number" id="sys-polling" class="w-full bg-gray-800 border border-gray-600 rounded p-2 text-white" title="Recomendado: 1000ms a 2000ms">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let token = "";
+
+        async function autenticar() {
+            token = document.getElementById('token-input').value;
+            try {
+                const res = await fetch('/api/godmode/config', { headers: { 'X-GodMode-Token': token } });
+                if (res.status === 403) {
+                    alert("Token inválido.");
+                    return;
+                }
+                const config = await res.json();
+                
+                // Si el token es correcto, llenamos los campos y mostramos el panel
+                document.getElementById('plc-ip').value = config.plc.ip;
+                document.getElementById('plc-rack').value = config.plc.rack;
+                document.getElementById('plc-slot').value = config.plc.slot;
+                document.getElementById('plc-simulacion').checked = config.plc.simulacion;
+                
+                document.getElementById('db-principal').value = config.database.retencion_principal_dias;
+                document.getElementById('db-archivo').value = config.database.retencion_archivo_dias;
+                document.getElementById('sys-polling').value = config.sistema.polling_ms;
+
+                document.getElementById('login-modal').classList.add('hidden');
+                document.getElementById('admin-panel').classList.remove('hidden');
+            } catch (e) { alert("Error de conexión con el Core."); }
+        }
+
+        async function guardarConfig() {
+            const nuevaConfig = {
+                plc: {
+                    ip: document.getElementById('plc-ip').value,
+                    rack: parseInt(document.getElementById('plc-rack').value),
+                    slot: parseInt(document.getElementById('plc-slot').value),
+                    simulacion: document.getElementById('plc-simulacion').checked
+                },
+                database: {
+                    retencion_principal_dias: parseInt(document.getElementById('db-principal').value),
+                    retencion_archivo_dias: parseInt(document.getElementById('db-archivo').value)
+                },
+                sistema: {
+                    polling_ms: parseInt(document.getElementById('sys-polling').value),
+                    log_level: "INFO"
+                },
+                licencia: { cliente: "Planta", expiracion: "2026-12-31", mac_autorizada: "ANY" } // Mantenemos defaults por ahora
+            };
+
+            try {
+                const res = await fetch('/api/godmode/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-GodMode-Token': token },
+                    body: JSON.stringify(nuevaConfig)
+                });
+
+                if (res.ok) {
+                    // Mensaje actualizado confirmando el Hot Reload
+                    alert("¡Configuración guardada! La conexión al PLC se ha actualizado en tiempo real sin necesidad de reiniciar.");
+                } else {
+                    const errorData = await res.json();
+                    alert("Error al guardar la configuración: " + (errorData.message || "Fallo en el servidor"));
+                }
+            } catch (err) {
+                alert("Error crítico de red al intentar comunicarse con el servidor.");
+            }
+        }
+    </script>
+</body>
+</html>

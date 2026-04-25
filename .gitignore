@@ -1,0 +1,18 @@
+# Entornos virtuales
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Archivos de base de datos SQLite (si quedaron rastros)
+*.db
+*.db-shm
+*.db-wal
+
+# Archivos de licenciamiento y seguridad
+license.key
+.sys_time
+
+# Configuración sensible y logs
+*.log
+.env

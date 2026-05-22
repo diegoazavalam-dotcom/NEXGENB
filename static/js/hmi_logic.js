@@ -24,12 +24,16 @@ const HMI_Logic = {
         const sensores = Array.isArray(datos_entrada) ? datos_entrada : (datos_entrada.sensores || []);
 
         sensores.forEach(sensor => {
+            // Filtro: Los sensores administrativos (Hardware) no van en el plano operativo
+            if (sensor.protocolo === 'SNMP') return;
+
             let el = document.getElementById(`nodo-${sensor.n}`);
             
             if (!el) {
                 el = document.createElement('div');
                 el.id = `nodo-${sensor.n}`;
-                el.className = 'absolute flex flex-col items-center justify-center transition-all duration-300 cursor-grab group';
+                el.className = 'absolute flex flex-col items-center justify-center cursor-grab group';
+                el.style.transition = 'left 0.3s ease, top 0.3s ease';
                 container.appendChild(el);
                 this.hacerArrastrable(el, sensor.n);
                 
@@ -41,18 +45,32 @@ const HMI_Logic = {
                 });
             }
 
-            const valorActual = parseFloat(sensor.val).toFixed(1);
-            const esAlerta = valorActual > parseFloat(sensor.lh) || valorActual < parseFloat(sensor.ll);
+            const isDisconnected = document.getElementById('plc-status-text')?.innerText.includes('DESCONECTADO');
+            let valorActual = parseFloat(sensor.val).toFixed(1);
+            let esAlerta = false;
             
-            // --- NUEVO ESTILO GLASS TRASLÚCIDO CON CIRCUNFERENCIA MARCADA ---
-            // Si está bien: Cristal verde con borde verde remarcado
-            // Si es alerta: Cristal rojo con borde rojo remarcado y animación
-            const colorBg = esAlerta ? 'bg-red-500/30' : 'bg-green-500/20';
-            const colorBorder = esAlerta ? 'border-red-500' : 'border-green-400';
-            const shadow = esAlerta ? 'shadow-[0_0_20px_rgba(239,68,68,0.6)]' : 'shadow-[0_0_15px_rgba(74,222,128,0.3)]';
-            const animacion = esAlerta ? 'sensor-alerta' : ''; 
+            let colorBg = 'bg-green-500/20';
+            let colorBorder = 'border-green-400';
+            let shadow = 'shadow-[0_0_15px_rgba(74,222,128,0.3)]';
+            let animacion = '';
 
-            if (el.dataset.dragging !== "true") {
+            if (isDisconnected) {
+                valorActual = '--';
+                colorBg = 'bg-gray-500/40';
+                colorBorder = 'border-gray-500';
+                shadow = 'shadow-none';
+            } else {
+                esAlerta = valorActual > parseFloat(sensor.lh) || valorActual < parseFloat(sensor.ll);
+                colorBg = esAlerta ? 'bg-red-500/30' : 'bg-gray-500/20';
+                colorBorder = esAlerta ? 'border-red-500' : 'border-gray-500';
+                shadow = esAlerta ? 'shadow-[0_0_20px_rgba(239,68,68,0.6)]' : 'shadow-none';
+                animacion = esAlerta ? 'sensor-alerta' : ''; 
+            } 
+
+            const lastRelease = el.dataset.lastRelease ? parseInt(el.dataset.lastRelease) : 0;
+            const isRecentlyReleased = (Date.now() - lastRelease) < 2000;
+
+            if (el.dataset.dragging !== "true" && !isRecentlyReleased) {
                 el.style.left = `${sensor.x}%`;
                 el.style.top = `${sensor.y}%`;
                 el.style.transform = 'translate(-50%, -50%)';
@@ -76,6 +94,7 @@ const HMI_Logic = {
         el.addEventListener('mousedown', (e) => {
             isDragging = true;
             el.dataset.dragging = "true";
+            el.style.transition = 'none';
             el.classList.replace('cursor-grab', 'cursor-grabbing');
         });
 
@@ -98,10 +117,14 @@ const HMI_Logic = {
             if (isDragging) {
                 isDragging = false;
                 el.dataset.dragging = "false";
+                el.style.transition = 'left 0.3s ease, top 0.3s ease';
                 el.classList.replace('cursor-grabbing', 'cursor-grab');
                 
                 const posX = parseFloat(el.style.left);
                 const posY = parseFloat(el.style.top);
+                
+                // Evitamos el snap-back congelando telemetría en este nodo temporalmente
+                el.dataset.lastRelease = Date.now().toString();
                 
                 try {
                     await fetch('/api/admin/update_position', {
@@ -109,6 +132,13 @@ const HMI_Logic = {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ n: nombreSensor, x: posX, y: posY })
                     });
+                    
+                    // HOOK MODEL: Inversión y Recompensa (Micro-interacción satisfactoria)
+                    if (typeof UIUtils !== 'undefined') {
+                        UIUtils.showToast(`Layout Actualizado: ${nombreSensor} anclado.`, 'success');
+                    }
+                    el.classList.add('scale-125', 'ring-4', 'ring-blue-500/50');
+                    setTimeout(() => el.classList.remove('scale-125', 'ring-4', 'ring-blue-500/50'), 300);
                 } catch (error) {
                     console.error("Error al guardar la posición:", error);
                 }

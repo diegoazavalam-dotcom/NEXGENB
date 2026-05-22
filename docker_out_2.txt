@@ -1,0 +1,52 @@
+EXIT: 0
+STDOUT:
+ Requirement already satisfied: packaging in /usr/local/lib/python3.11/site-packages (from gunicorn) (26.2)
+#11 3.603 Downloading gunicorn-26.0.0-py3-none-any.whl (212 kB)
+#11 3.749    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 212.0/212.0 kB 1.8 MB/s eta 0:00:00
+#11 4.409 Installing collected packages: gunicorn
+#11 4.669 Successfully installed gunicorn-26.0.0
+#11 4.670 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
+#11 8.002 
+#11 8.002 [notice] A new release of pip is available: 24.0 -> 26.1.1
+#11 8.002 [notice] To update, run: pip install --upgrade pip
+#11 DONE 8.7s
+
+#12 [7/8] COPY . .
+#12 DONE 2.3s
+
+#13 [8/8] RUN chmod +x start.sh
+#13 DONE 1.7s
+
+#14 exporting to image
+#14 exporting layers
+#14 exporting layers 101.6s done
+#14 exporting manifest sha256:8589fc925a366582c77d85cdc923638b4e6f0e6f6833800dacb83596301f9b93 0.1s done
+#14 exporting config sha256:cacf55f6f377837f944a2cc22ef4711ec4c33cf1b3969ad80fc79a121a42c06c
+#14 exporting config sha256:cacf55f6f377837f944a2cc22ef4711ec4c33cf1b3969ad80fc79a121a42c06c 0.2s done
+#14 exporting attestation manifest sha256:a253a22b7d66ecf5c22a6e64e62e2940d956eba0156adfc65a679c0cbb007b49
+#14 exporting attestation manifest sha256:a253a22b7d66ecf5c22a6e64e62e2940d956eba0156adfc65a679c0cbb007b49 0.3s done
+#14 exporting manifest list sha256:1566854b35199fc57301ccb1a686cc6d591865a93abc9c10455e06256ee376b7
+#14 exporting manifest list sha256:1566854b35199fc57301ccb1a686cc6d591865a93abc9c10455e06256ee376b7 0.1s done
+#14 naming to docker.io/library/scada_final_1-scada_core:latest
+#14 naming to docker.io/library/scada_final_1-scada_core:latest 0.1s done
+#14 unpacking to docker.io/library/scada_final_1-scada_core:latest
+#14 unpacking to docker.io/library/scada_final_1-scada_core:latest 124.2s done
+#14 DONE 227.2s
+
+#15 resolving provenance for metadata file
+#15 DONE 0.3s
+
+STDERR:
+[sudo] password for raiz: time="2026-05-21T00:13:28Z" level=warning msg="/home/raiz/SCADA_FINAL_1/docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+ Image scada_final_1-scada_core Building 
+ Image scada_final_1-scada_core Built 
+ Network scada_final_1_default Creating 
+ Network scada_final_1_default Created 
+ Container nexgen_db Creating 
+ Container nexgen_db Created 
+ Container nexgen_scada Creating 
+ Container nexgen_scada Created 
+ Container nexgen_db Starting 
+ Container nexgen_db Started 
+ Container nexgen_scada Starting 
+ Container nexgen_scada Started 

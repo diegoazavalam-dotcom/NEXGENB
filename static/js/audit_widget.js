@@ -92,7 +92,8 @@ const AuditWidget = {
             const res = await fetch(`/api/admin/auditoria?u=${encodeURIComponent(u)}&a=${encodeURIComponent(a)}&f=${encodeURIComponent(f)}`, { credentials: 'include' });
             
             if (!res.ok) throw new Error("Fallo en servidor");
-            const logs = await res.json();
+            const data = await res.json();
+            const logs = data.logs || [];
             
             if (!logs || logs.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="4" class="text-center p-8 opacity-50 text-red-400 font-bold uppercase tracking-widest">No se encontraron registros.</td></tr>`;

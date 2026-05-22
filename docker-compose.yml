@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  postgres_db:
+    image: postgres:15-alpine
+    container_name: nexgen_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Root123
+      POSTGRES_DB: nexgen_v7
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  scada_core:
+    build: .
+    container_name: nexgen_scada
+    depends_on:
+      - postgres_db
+    environment:
+      - DB_HOST=postgres_db
+      - DB_NAME=nexgen_v7
+      - DB_USER=postgres
+      - DB_PASS=Root123
+      - DB_PORT=5432
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "5005:5005"
+      - "5006:5006"
+    volumes:
+      - .:/app
+      - /app/venv
+      - /app/__pycache__
+    restart: unless-stopped
+
+volumes:
+  pgdata:

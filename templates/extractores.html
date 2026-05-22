@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NexGen SCADA | Instrumentación y Control</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    
+    <style>
+        body { background: #000205; color: #a1a1aa; font-family: 'Inter', sans-serif; overflow-x: hidden; }
+        h1, h2, h3, h4, .brand-font { font-family: 'Outfit', sans-serif; }
+        
+        .glass-panel { 
+            background: rgba(13, 17, 23, 0.7); 
+            backdrop-filter: blur(16px); 
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.05); 
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        .glass-nav { 
+            background: rgba(255, 255, 255, 0.03); 
+            border: 1px solid rgba(255, 255, 255, 0.05); 
+            backdrop-filter: blur(8px); 
+        }
+
+        .honeywell-card {
+            background: linear-gradient(145deg, #0a0a0a 0%, #171717 100%);
+            border: 1px solid rgba(255,255,255,0.05);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .honeywell-glow {
+            position: absolute;
+            top: 20%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 150px;
+            height: 150px;
+            pointer-events: none;
+            z-index: 0;
+            transition: all 0.5s ease;
+        }
+
+        .gas-bar-container {
+            background: #000;
+            border-radius: 999px;
+            padding: 2px;
+            box-shadow: inset 0 2px 10px rgba(0,0,0,0.8);
+            border: 1px solid rgba(255,255,255,0.05);
+            height: 10px;
+            position: relative;
+            overflow: hidden;
+            width: 100%;
+        }
+
+        .gas-bar-fill {
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #10b981 0%, #3b82f6 50%, #ef4444 100%);
+            width: 0%;
+            transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 0.9; }
+            50% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(1); opacity: 0.9; }
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); }
+        ::-webkit-scrollbar-thumb { background: rgba(59, 130, 246, 0.2); border-radius: 999px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(59, 130, 246, 0.5); }
+    </style>
+</head>
+<body class="p-6 selection:bg-blue-500 selection:text-white">
+
+    <!-- Header / Nav -->
+    <div class="grid grid-cols-1 md:grid-cols-3 items-center mb-10 gap-6">
+        <div class="flex items-center justify-start gap-6">
+            <div class="relative group">
+                <div class="absolute inset-0 bg-blue-600/20 blur-[60px] rounded-full scale-110"></div>
+                <img src="{{ url_for('static', filename='img/zole_logo.png') }}" alt="ZoLe Logo" class="relative h-20 w-auto object-contain">
+            </div>
+            <div class="flex flex-col">
+                <h1 class="text-3xl font-black text-white tracking-tighter italic leading-none uppercase">NexGen <span class="text-blue-500">SCADA</span></h1>
+                <p class="text-[8px] font-bold text-gray-600 tracking-[0.5em] uppercase mt-1">Industrial HVAC Control v6.4</p>
+            </div>
+        </div>
+
+        <div class="flex justify-center"></div>
+
+        <div class="flex justify-end items-center gap-3">
+            <nav class="flex items-center gap-1 glass-nav p-2 rounded-2xl border-white/10 shadow-2xl">
+                <a href="/" class="p-2.5 hover:bg-white/5 rounded-xl text-gray-400 hover:text-white transition-all" title="Dashboard">🏠</a>
+                <a href="/reports" class="p-2.5 hover:bg-white/5 rounded-xl text-gray-400 hover:text-white transition-all" title="Analítica">📊</a>
+                <a href="/extractores" class="p-2.5 bg-blue-500/10 text-white rounded-xl shadow-inner border border-blue-500/20" title="Extractores de Gas">💨</a>
+                
+                <div class="w-[1px] h-6 bg-white/10 mx-1"></div>
+                
+                <a href="/static/pdf/manual.pdf" target="_blank" class="p-2.5 hover:bg-white/5 rounded-xl text-blue-400 hover:text-blue-300 transition-all text-sm" title="Manual de Operación">❓</a>
+                <button onclick="AuthWidget.logout()" class="ml-2 px-4 py-2 bg-red-600/20 hover:bg-red-600 text-white rounded-xl text-[9px] font-black uppercase transition-all">Salir</button>
+            </nav>
+        </div>
+    </div>
+
+    <main class="max-w-[1600px] mx-auto animate-in fade-in duration-700 pb-20">
+        
+        <!-- CONTROLES SUPERIORES: BUSCADOR Y FILTROS -->
+        <div class="glass-panel rounded-3xl p-6 mb-8 flex flex-col md:flex-row gap-6 justify-between items-center border border-white/5 shadow-2xl">
+            <!-- Buscador -->
+            <div class="relative w-full md:w-96">
+                <input type="text" id="search-input" placeholder="🔍 Buscar sensor..." oninput="handleSearch(this.value)" class="w-full bg-black/40 border border-white/10 text-white p-3.5 pl-10 rounded-2xl outline-none focus:border-blue-500 font-bold text-xs uppercase tracking-widest placeholder-gray-600 transition-all">
+            </div>
+
+            <!-- Filtros de categoría -->
+            <div class="flex flex-wrap gap-3 w-full md:w-auto">
+                <button id="filter-btn-all" onclick="setFilter('all')" class="filter-btn px-6 py-3 rounded-2xl bg-blue-600 text-white border border-white/5 font-black text-[10px] uppercase tracking-widest transition-all">Todos</button>
+                <button id="filter-btn-analog" onclick="setFilter('analog')" class="filter-btn px-6 py-3 rounded-2xl bg-white/5 text-gray-400 border border-white/5 font-black text-[10px] uppercase tracking-widest hover:text-white transition-all">Analógicos</button>
+                <button id="filter-btn-binary" onclick="setFilter('binary')" class="filter-btn px-6 py-3 rounded-2xl bg-white/5 text-gray-400 border border-white/5 font-black text-[10px] uppercase tracking-widest hover:text-white transition-all">Actuadores (Binario)</button>
+                <button id="filter-btn-alarms" onclick="setFilter('alarms')" class="filter-btn px-6 py-3 rounded-2xl bg-white/5 text-gray-400 border border-white/5 font-black text-[10px] uppercase tracking-widest hover:text-white transition-all">Alertas Activas</button>
+            </div>
+        </div>
+
+        <!-- TARJETAS DE MÉTRICAS / ESTADÍSTICAS -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mb-10">
+            <div class="glass-panel rounded-3xl p-5 border border-white/5 flex flex-col justify-between">
+                <span class="text-[8px] font-black text-gray-500 uppercase tracking-widest">Nodos Totales</span>
+                <span class="text-3xl font-black text-white mt-2" id="stat-total-nodes">0</span>
+            </div>
+            <div class="glass-panel rounded-3xl p-5 border border-white/5 flex flex-col justify-between">
+                <span class="text-[8px] font-black text-blue-500 uppercase tracking-widest">Variables Analógicas</span>
+                <span class="text-3xl font-black text-blue-400 mt-2" id="stat-analog-nodes">0</span>
+            </div>
+            <div class="glass-panel rounded-3xl p-5 border border-white/5 flex flex-col justify-between">
+                <span class="text-[8px] font-black text-green-500 uppercase tracking-widest">Actuadores Digitales</span>
+                <span class="text-3xl font-black text-green-400 mt-2" id="stat-binary-nodes">0</span>
+            </div>
+            <div class="glass-panel rounded-3xl p-5 border border-white/5 flex flex-col justify-between">
+                <span class="text-[8px] font-black text-red-500 uppercase tracking-widest">Alertas Activas</span>
+                <span class="text-3xl font-black text-white mt-2" id="stat-active-alarms">0</span>
+            </div>
+            <div class="glass-panel rounded-3xl p-5 border border-white/5 flex flex-col justify-between">
+                <span class="text-[8px] font-black text-blue-400 uppercase tracking-widest">Salud Operativa</span>
+                <span class="text-3xl font-black text-green-400 mt-2" id="stat-global-health">100%</span>
+            </div>
+        </div>
+
+        <!-- SECCIÓN ÚNICA DE CUADRÍCULA DE SENSORES DINÁMICOS -->
+        <div class="mb-12">
+            <div class="flex items-end justify-between mb-6">
+                <div>
+                    <h2 class="text-2xl font-black text-white uppercase tracking-wider brand-font flex items-center gap-3">
+                        <span class="w-3 h-3 rounded-full bg-blue-500 animate-pulse" id="grid-status-led"></span>
+                        Cuadrícula de Instrumentación y Control
+                    </h2>
+                    <p class="text-[10px] text-gray-500 uppercase tracking-widest mt-1">Nodos distribuidos del sistema SCADA en tiempo real</p>
+                </div>
+            </div>
+            
+            <div id="sensors-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div class="col-span-full text-center p-16 text-gray-500 animate-pulse font-mono text-xs uppercase tracking-widest glass-panel rounded-2xl">
+                    Sincronizando con la Red SCADA...
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Contenedor de Toasts -->
+    <div id="toast-container" class="fixed top-6 right-6 z-[9999] flex flex-col gap-3 pointer-events-none"></div>
+
+    <script src="{{ url_for('static', filename='js/auth_widget.js') }}"></script>
+    
+    <script>
+        const UIUtils = {
+            showToast(message, type = 'success') {
+                const container = document.getElementById('toast-container');
+                if (!container) return;
+                const toast = document.createElement('div');
+                const bgColor = type === 'success' ? 'bg-green-500/10 border-green-500/30' : (type === 'error' ? 'bg-red-500/10 border-red-500/30' : 'bg-blue-500/10 border-blue-500/30');
+                const textColor = type === 'success' ? 'text-green-400' : (type === 'error' ? 'text-red-400' : 'text-blue-400');
+                const icon = type === 'success' ? '✅' : (type === 'error' ? '❌' : 'ℹ️');
+                toast.className = `glass-panel ${bgColor} border border-white/5 p-4 rounded-2xl shadow-2xl flex items-center gap-3 transform transition-all duration-300 translate-x-full opacity-0 max-w-sm backdrop-blur-xl pointer-events-auto`;
+                toast.innerHTML = `<span class="text-xl">${icon}</span><span class="${textColor} font-bold text-[9px] uppercase tracking-widest leading-relaxed">${message}</span>`;
+                container.appendChild(toast);
+                setTimeout(() => toast.classList.remove('translate-x-full', 'opacity-0'), 10);
+                setTimeout(() => { toast.classList.add('translate-x-full', 'opacity-0'); setTimeout(() => toast.remove(), 300); }, 4000);
+            }
+        };
+
+        let dbNodes = []; // Lista completa de nodos de la BD
+        let currentFilter = 'all'; // all, analog, binary, alarms
+        let searchQuery = '';
+        let socket;
+
+        async function init() {
+            await AuthWidget.verificarAcceso();
+            await loadConfiguracionSensores();
+
+            // Conectar a SocketIO para Telemetría Unificada
+            socket = io();
+            socket.on('telemetria_update', function(data) {
+                if(data && data.sensores) {
+                    let needsRerender = false;
+                    
+                    data.sensores.forEach(s => {
+                        // Buscar el nodo en nuestra lista local
+                        let localNode = dbNodes.find(n => n.n === s.n);
+                        if (!localNode) {
+                            // Si llega telemetría de un nodo que no tenemos configurado, gatillamos una recarga
+                            needsRerender = true;
+                            return;
+                        }
+
+                        // Actualizar valor en caliente
+                        localNode.val = s.val;
+
+                        // Localizar elementos en el DOM para actualizar sin redibujar toda la cuadrícula
+                        const valEl = document.getElementById(`val-${s.n}`);
+                        const barEl = document.getElementById(`bar-${s.n}`);
+                        const maEl = document.getElementById(`ma-${s.n}`);
+                        const badgeEl = document.getElementById(`badge-${s.n}`);
+                        const glowEl = document.getElementById(`glow-${s.n}`);
+                        const cardEl = document.getElementById(`card-${s.n}`);
+                        const thermometerFill = document.getElementById(`thermometer-fill-${s.n}`);
+
+                        // Elementos de controles binarios
+                        const iconWrapper = document.getElementById(`icon-wrapper-${s.n}`);
+                        const mBadge = document.getElementById(`m-badge-${s.n}`);
+                        const widget = document.getElementById(`widget-${s.n}`);
+                        const fanCont = document.getElementById(`fan-container-${s.n}`);
+
+                        const valFloat = parseFloat(s.val);
+
+                        if (localNode.m === 'BOOL') {
+                            const isRunning = valFloat > 0;
+                            if (mBadge) {
+                                mBadge.innerText = isRunning ? "RUNNING" : "PARO";
+                                mBadge.className = `text-[7px] font-black px-3 py-1.5 rounded-full border tracking-widest transition-all duration-300 ${isRunning ? 'bg-green-500/20 text-green-400 border-green-500/50 animate-pulse' : 'bg-gray-500/20 text-gray-400 border-gray-500/30'}`;
+                            }
+                            if (iconWrapper) {
+                                const { sensorType } = getSensorIconAndGlow(localNode);
+                                let anim = 'none';
+                                if (isRunning) {
+                                    anim = sensorType === 'Válvula' ? 'pulse 2s infinite' : 'spin 1.2s linear infinite';
+                                }
+                                iconWrapper.style.animation = anim;
+                                iconWrapper.className = isRunning ? 'text-green-400' : 'text-slate-700';
+                            }
+                            if (widget) {
+                                if (isRunning) {
+                                    widget.className = "glass-panel rounded-[2rem] p-6 border transition-all duration-500 hover:scale-[1.03] flex flex-col justify-between h-[340px] border-green-500/30 shadow-[0_10px_35px_rgba(16,185,129,0.15)]";
+                                } else {
+                                    widget.className = "glass-panel rounded-[2rem] p-6 border transition-all duration-500 hover:scale-[1.03] flex flex-col justify-between h-[340px] border-white/5";
+                                }
+                            }
+                            if (fanCont) {
+                                fanCont.style.borderColor = isRunning ? "rgba(16,185,129,0.4)" : "rgba(30,41,59,0.8)";
+                            }
+                        } else {
+                            // Sensores Analógicos
+                            const limitLow = parseFloat(localNode.ll || 0);
+                            const limitHigh = parseFloat(localNode.lh || 100);
+                            const limitAlert = parseFloat(localNode.l || limitHigh);
+
+                            const isWireBreak = valFloat < 0;
+                            const isAlarmHigh = valFloat >= limitHigh;
+                            const isAlarmLow = valFloat <= limitLow;
+                            const isAlarm = isAlarmHigh || isAlarmLow;
+
+                            if (valEl) valEl.innerText = isWireBreak ? 'ERR' : valFloat.toFixed(1);
+
+                            // Calcular porcentaje barra
+                            let currentPercent = 0;
+                            if (!isWireBreak) {
+                                const range = limitHigh - limitLow || 100;
+                                currentPercent = Math.min(Math.max(((valFloat - limitLow) / range) * 100, 0), 100);
+                            }
+                            if (barEl) barEl.style.width = `${currentPercent}%`;
+
+                            if (thermometerFill) {
+                                thermometerFill.style.height = `${currentPercent}%`;
+                                let thermometerBarClass = 'bg-orange-500';
+                                const { sensorType } = getSensorIconAndGlow(localNode);
+                                if (sensorType === 'Temperatura') {
+                                    thermometerBarClass = isAlarm ? 'bg-red-500' : 'bg-orange-500';
+                                } else if (sensorType === 'Presión') {
+                                    thermometerBarClass = isAlarm ? 'bg-red-500' : 'bg-cyan-500';
+                                } else {
+                                    thermometerBarClass = isAlarm ? 'bg-red-500' : 'bg-blue-500';
+                                }
+                                thermometerFill.className = `w-full rounded-full transition-all duration-500 ${thermometerBarClass}`;
+                            }
+
+                            // Miliamperios lazo analógico (4-20mA)
+                            const range = limitHigh - limitLow || 100;
+                            const cleanVal = Math.min(Math.max(valFloat, limitLow), limitHigh);
+                            let currentMa = isWireBreak ? 0.0 : ((cleanVal - limitLow) / range) * 16.0 + 4.0;
+                            if (maEl) maEl.innerText = `${currentMa.toFixed(2)} mA`;
+
+                            // Badge y resplandor
+                            let badgeText = "OK";
+                            let badgeClass = "bg-gray-500/20 text-gray-400 border-gray-500/30";
+                            let cardBorderClass = 'honeywell-card rounded-[2rem] p-6 border flex flex-col items-center justify-between h-[340px] transition-all duration-500 hover:scale-[1.03] border-white/5';
+                            let glowColor = 'rgba(255, 255, 255, 0.02)';
+
+                            const { sensorType } = getSensorIconAndGlow(localNode);
+
+                            if (isWireBreak) {
+                                badgeText = "WIRE BREAK";
+                                badgeClass = "bg-red-500/20 text-red-500 border-red-500/50 animate-pulse";
+                                cardBorderClass = "honeywell-card rounded-[2rem] p-6 border flex flex-col items-center justify-between h-[340px] transition-all duration-500 hover:scale-[1.03] border-red-500/30 shadow-[0_10px_35px_rgba(239,68,68,0.15)]";
+                                glowColor = 'rgba(239, 68, 68, 0.4)';
+                            } else if (isAlarmHigh) {
+                                badgeText = "ALTA ALARMA";
+                                badgeClass = "bg-red-500/20 text-red-500 border-red-500/50 animate-pulse";
+                                cardBorderClass = "honeywell-card rounded-[2rem] p-6 border flex flex-col items-center justify-between h-[340px] transition-all duration-500 hover:scale-[1.03] border-red-500/30 shadow-[0_10px_35px_rgba(239,68,68,0.15)]";
+                                glowColor = 'rgba(239, 68, 68, 0.5)';
+                            } else if (isAlarmLow) {
+                                badgeText = "BAJA ALARMA";
+                                badgeClass = "bg-blue-500/20 text-blue-400 border-blue-500/50 animate-pulse";
+                                cardBorderClass = "honeywell-card rounded-[2rem] p-6 border flex flex-col items-center justify-between h-[340px] transition-all duration-500 hover:scale-[1.03] border-blue-500/30 shadow-[0_10px_35px_rgba(59,130,246,0.15)]";
+                                glowColor = 'rgba(59, 130, 246, 0.4)';
+                            } else {
+                                if (sensorType === 'Temperatura') {
+                                    glowColor = valFloat > 30 ? 'rgba(249, 115, 22, 0.2)' : 'rgba(59, 130, 246, 0.15)';
+                                } else if (sensorType === 'Presión') {
+                                    glowColor = 'rgba(6, 182, 212, 0.2)';
+                                } else {
+                                    glowColor = 'rgba(16, 185, 129, 0.15)';
+                                }
+                            }
+
+                            if (badgeEl) {
+                                badgeEl.innerText = badgeText;
+                                badgeEl.className = `text-[7px] font-black px-3 py-1.5 rounded-full border tracking-widest transition-all duration-300 ${badgeClass}`;
+                            }
+                            if (glowEl) {
+                                glowEl.style.background = `radial-gradient(circle, ${glowColor} 0%, rgba(0,0,0,0) 70%)`;
+                            }
+                            if (cardEl) {
+                                cardEl.className = cardBorderClass;
+                            }
+                        }
+                    });
+
+                    updateMetrics();
+
+                    if (needsRerender) {
+                        loadConfiguracionSensores();
+                    }
+                }
+            });
+        }
+
+        async function loadConfiguracionSensores() {
+            try {
+                const res = await fetch('/api/telemetria');
+                if(res.ok) {
+                    const data = await res.json();
+                    dbNodes = data.sensores || [];
+                    renderSensorsGrid();
+                }
+            } catch (e) {
+                console.error("Error al cargar configuración de sensores:", e);
+            }
+        }
+
+        function setFilter(filter) {
+            currentFilter = filter;
+            // Actualizar estado activo de los botones de filtro
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.classList.remove('bg-blue-600', 'text-white');
+                btn.classList.add('bg-white/5', 'text-gray-400');
+            });
+            const activeBtn = document.getElementById(`filter-btn-${filter}`);
+            if (activeBtn) {
+                activeBtn.classList.remove('bg-white/5', 'text-gray-400');
+                activeBtn.classList.add('bg-blue-600', 'text-white');
+            }
+            renderSensorsGrid();
+        }
+
+        function handleSearch(query) {
+            searchQuery = query.toLowerCase();
+            renderSensorsGrid();
+        }
+
+        function getSensorIconAndGlow(nodo) {
+            const name = nodo.n.toLowerCase();
+            const val = parseFloat(nodo.val);
+            const limitHigh = parseFloat(nodo.lh || 100);
+            const limitLow = parseFloat(nodo.ll || 0);
+            const isAlarm = val >= limitHigh || val <= limitLow;
+
+            let iconSvg = '';
+            let glowColor = 'rgba(59, 130, 246, 0.1)'; // Brillo azul por defecto
+            let sensorType = 'General';
+
+            if (nodo.m === 'BOOL') {
+                if (name.includes('extractor') || name.includes('fan') || name.includes('ventilador')) {
+                    sensorType = 'Extractor';
+                    iconSvg = `
+                        <svg id="fan-${nodo.n}" class="w-12 h-12 text-current transition-colors" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M10.827 16.379a6.082 6.082 0 0 1-8.618-7.002l5.412 1.45a6.082 6.082 0 0 0 7.002-8.618l-1.45 5.412a6.082 6.082 0 0 1 8.618 7.002l-5.412-1.45a6.082 6.082 0 0 0-7.002 8.618l1.45-5.412Z"/>
+                            <path d="M12 12v.01"/>
+                        </svg>`;
+                } else if (name.includes('valve') || name.includes('válvula')) {
+                    sensorType = 'Válvula';
+                    iconSvg = `
+                        <svg id="valve-${nodo.n}" class="w-12 h-12 text-current transition-colors" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M12 2v7"/>
+                            <path d="M12 15v7"/>
+                            <path d="M2 12h7"/>
+                            <path d="M15 12h7"/>
+                            <path d="m19 5-3 3"/>
+                            <path d="m5 19 3-3"/>
+                            <path d="m5 5 3 3"/>
+                            <path d="m19 19-3-3"/>
+                        </svg>`;
+                } else {
+                    sensorType = 'Actuador';
+                    iconSvg = `
+                        <svg id="motor-${nodo.n}" class="w-12 h-12 text-current transition-colors" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="4" y="4" width="16" height="16" rx="2"/>
+                            <path d="M12 2v2"/>
+                            <path d="M12 20v2"/>
+                            <path d="M20 12h2"/>
+                            <path d="M2 12h2"/>
+                            <circle cx="12" cy="12" r="4"/>
+                        </svg>`;
+                }
+            } else {
+                // Sensores Analógicos
+                if (name.includes('gas') || nodo.u?.toUpperCase() === 'LEL') {
+                    sensorType = 'Gas';
+                    glowColor = isAlarm ? 'rgba(239, 68, 68, 0.4)' : 'rgba(59, 130, 246, 0.1)';
+                } else if (name.includes('temp') || name.includes('temperat') || nodo.u?.includes('°')) {
+                    sensorType = 'Temperatura';
+                    glowColor = isAlarm ? 'rgba(239, 68, 68, 0.4)' : (val > 30 ? 'rgba(249, 115, 22, 0.2)' : 'rgba(59, 130, 246, 0.15)');
+                } else if (name.includes('pres') || name.includes('pressure') || name.includes('presi') || nodo.u?.toLowerCase() === 'bar' || nodo.u?.toLowerCase() === 'psi') {
+                    sensorType = 'Presión';
+                    glowColor = isAlarm ? 'rgba(239, 68, 68, 0.4)' : 'rgba(6, 182, 212, 0.2)';
+                } else {
+                    sensorType = 'Variable';
+                    glowColor = isAlarm ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.15)';
+                }
+            }
+
+            return { iconSvg, glowColor, sensorType };
+        }
+
+        function renderSensorsGrid() {
+            const container = document.getElementById('sensors-grid');
+            if (!container) return;
+
+            // Filtrar lista
+            let filtered = dbNodes.filter(nodo => {
+                const matchesSearch = nodo.n.toLowerCase().includes(searchQuery) || (nodo.u && nodo.u.toLowerCase().includes(searchQuery));
+                if (!matchesSearch) return false;
+
+                if (currentFilter === 'all') return true;
+                if (currentFilter === 'analog') return nodo.m === 'REAL' || nodo.m === 'INT';
+                if (currentFilter === 'binary') return nodo.m === 'BOOL';
+                if (currentFilter === 'alarms') {
+                    const val = parseFloat(nodo.val);
+                    return (val >= parseFloat(nodo.lh || 100) || val <= parseFloat(nodo.ll || 0)) && (nodo.m === 'REAL' || nodo.m === 'INT');
+                }
+                return true;
+            });
+
+            if (filtered.length === 0) {
+                container.innerHTML = `
+                    <div class="col-span-full p-16 glass-panel rounded-[2rem] text-center text-gray-500 font-mono text-xs uppercase tracking-widest animate-pulse">
+                        No se encontraron sensores para los filtros seleccionados
+                    </div>
+                `;
+                updateMetrics();
+                return;
+            }
+
+            container.innerHTML = filtered.map(nodo => {
+                const { iconSvg, glowColor, sensorType } = getSensorIconAndGlow(nodo);
+                const valFloat = parseFloat(nodo.val);
+                const isBool = nodo.m === 'BOOL';
+
+                if (isBool) {
+                    // Tarjeta Binaria (Actuador)
+                    const isRunning = valFloat > 0;
+                    const badgeText = isRunning ? "RUNNING" : "PARO";
+                    const badgeClass = isRunning 
+                        ? "bg-green-500/20 text-green-400 border-green-500/50 animate-pulse" 
+                        : "bg-gray-500/20 text-gray-400 border-gray-500/30";
+                    const borderStyle = isRunning ? 'border-green-500/30 shadow-[0_10px_35px_rgba(16,185,129,0.15)]' : 'border-white/5';
+                    const iconColor = isRunning ? 'text-green-400' : 'text-slate-700';
+                    const animationStyle = isRunning ? 'spin 1.2s linear infinite' : 'none';
+
+                    let finalAnimation = animationStyle;
+                    if (sensorType === 'Válvula') {
+                        finalAnimation = isRunning ? 'pulse 2s infinite' : 'none';
+                    }
+
+                    return `
+                        <div class="glass-panel rounded-[2rem] p-6 border transition-all duration-500 hover:scale-[1.03] flex flex-col justify-between h-[340px] ${borderStyle}" id="widget-${nodo.n}">
+                            <div class="flex justify-between items-start mb-4">
+                                <div>
+                                    <span class="text-[7px] font-black text-blue-500 uppercase tracking-widest">${sensorType}</span>
+                                    <h4 class="text-white font-black text-sm uppercase tracking-widest brand-font truncate max-w-[150px]" title="${nodo.n}">
+                                        ${nodo.n.replace('Extractor_', '').replace('Gas_', '').replace('_', ' ').replace('_Run', '')}
+                                    </h4>
+                                    <p class="text-[7px] font-mono text-gray-500 uppercase tracking-widest mt-1">DB: ${nodo.db || 100} | OFF: ${nodo.off || 0}</p>
+                                </div>
+                                <div id="m-badge-${nodo.n}" class="text-[7px] font-black px-3 py-1.5 rounded-full border tracking-widest transition-all duration-300 ${badgeClass}">${badgeText}</div>
+                            </div>
+                            
+                            <div class="flex items-center justify-center py-4 mb-2">
+                                <div class="flex justify-center items-center h-24 w-24 bg-[#030407] rounded-full border-[3px] border-slate-800/80 shadow-[inset_0_10px_30px_rgba(0,0,0,1)] transition-all duration-500" id="fan-container-${nodo.n}" style="border-color: ${isRunning ? 'rgba(16,185,129,0.4)' : 'rgba(30,41,59,0.8)'}">
+                                    <div id="icon-wrapper-${nodo.n}" style="animation: ${finalAnimation}" class="${iconColor}">
+                                        ${iconSvg}
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="flex gap-3 mt-4">
+                                <button onclick="enviarComandoActuador('${nodo.n}', 1)" class="flex-1 bg-green-600/10 border border-green-500/20 hover:bg-green-600 hover:border-green-500 text-green-400 hover:text-white font-black py-3.5 rounded-xl text-[8px] uppercase tracking-widest transition-all">ARRANCAR</button>
+                                <button onclick="enviarComandoActuador('${nodo.n}', 0)" class="flex-1 bg-red-600/10 border border-red-500/20 hover:bg-red-600 hover:border-red-500 text-red-500 hover:text-white font-black py-3.5 rounded-xl text-[8px] uppercase tracking-widest transition-all">PARAR</button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    // Tarjeta Analógica
+                    const limitLow = parseFloat(nodo.ll || 0);
+                    const limitHigh = parseFloat(nodo.lh || 100);
+                    const limitAlert = parseFloat(nodo.l || limitHigh);
+                    
+                    const isWireBreak = valFloat < 0;
+                    const isAlarmHigh = valFloat >= limitHigh;
+                    const isAlarmLow = valFloat <= limitLow;
+                    const isAlarm = isAlarmHigh || isAlarmLow;
+
+                    let badgeText = "OK";
+                    let badgeClass = "bg-gray-500/20 text-gray-400 border-gray-500/30";
+                    let cardBorder = 'border-white/5';
+                    
+                    if (isWireBreak) {
+                        badgeText = "WIRE BREAK";
+                        badgeClass = "bg-red-500/20 text-red-500 border-red-500/50 animate-pulse";
+                        cardBorder = "border-red-500/30 shadow-[0_10px_35px_rgba(239,68,68,0.15)]";
+                    } else if (isAlarmHigh) {
+                        badgeText = "ALTA ALARMA";
+                        badgeClass = "bg-red-500/20 text-red-500 border-red-500/50 animate-pulse";
+                        cardBorder = "border-red-500/30 shadow-[0_10px_35px_rgba(239,68,68,0.15)]";
+                    } else if (isAlarmLow) {
+                        badgeText = "BAJA ALARMA";
+                        badgeClass = "bg-blue-500/20 text-blue-400 border-blue-500/50 animate-pulse";
+                        cardBorder = "border-blue-500/30 shadow-[0_10px_35px_rgba(59,130,246,0.15)]";
+                    }
+
+                    let currentPercent = 0;
+                    if (!isWireBreak) {
+                        const range = limitHigh - limitLow || 100;
+                        currentPercent = Math.min(Math.max(((valFloat - limitLow) / range) * 100, 0), 100);
+                    }
+
+                    const range = limitHigh - limitLow || 100;
+                    const cleanVal = Math.min(Math.max(valFloat, limitLow), limitHigh);
+                    let currentMa = isWireBreak ? 0.0 : ((cleanVal - limitLow) / range) * 16.0 + 4.0;
+
+                    let displayGraphic = '';
+                    if (sensorType === 'Gas') {
+                        displayGraphic = `
+                            <div class="relative w-32 h-28 my-2 z-10 flex items-center justify-center">
+                                <img src="/static/img/honeywell_xcd.png" alt="Honeywell XCD" class="h-full object-contain filter brightness-110">
+                                <div class="absolute inset-0 flex items-center justify-center mt-3">
+                                    <span class="text-red-500 font-mono text-lg font-black bg-black/60 px-2 py-1.5 rounded border border-red-500/30" id="val-${nodo.n}">
+                                        ${isWireBreak ? 'ERR' : valFloat.toFixed(1)}
+                                    </span>
+                                </div>
+                            </div>
+                        `;
+                    } else {
+                        let thermometerBarClass = 'bg-orange-500';
+                        if (sensorType === 'Temperatura') {
+                            thermometerBarClass = isAlarm ? 'bg-red-500' : 'bg-orange-500';
+                        } else if (sensorType === 'Presión') {
+                            thermometerBarClass = isAlarm ? 'bg-red-500' : 'bg-cyan-500';
+                        } else {
+                            thermometerBarClass = isAlarm ? 'bg-red-500' : 'bg-blue-500';
+                        }
+
+                        displayGraphic = `
+                            <div class="relative w-28 h-28 my-2 z-10 flex items-center justify-center">
+                                <div class="h-20 w-8 bg-black/40 rounded-full border border-white/10 p-0.5 flex flex-col justify-end overflow-hidden">
+                                    <div class="w-full rounded-full transition-all duration-500 ${thermometerBarClass}" id="thermometer-fill-${nodo.n}" style="height: ${currentPercent}%"></div>
+                                </div>
+                                <div class="absolute right-0 flex flex-col items-center justify-center">
+                                    <span class="text-2xl font-black text-white font-mono leading-none" id="val-${nodo.n}">
+                                        ${isWireBreak ? 'ERR' : valFloat.toFixed(1)}
+                                    </span>
+                                    <span class="text-[9px] font-bold text-gray-500 uppercase tracking-widest mt-1">${nodo.u || ''}</span>
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    return `
+                        <div class="honeywell-card rounded-[2rem] p-6 border flex flex-col items-center justify-between h-[340px] transition-all duration-500 hover:scale-[1.03] ${cardBorder}" id="card-${nodo.n}">
+                            <div class="honeywell-glow transition-all duration-500" id="glow-${nodo.n}" style="background: radial-gradient(circle, ${glowColor} 0%, rgba(0,0,0,0) 70%)"></div>
+                            
+                            <div class="w-full flex justify-between items-start z-10 mb-2">
+                                <div>
+                                    <span class="text-[7px] font-black text-blue-500 uppercase tracking-widest">${sensorType}</span>
+                                    <h3 class="text-white font-black text-sm uppercase tracking-widest brand-font truncate max-w-[130px]" title="${nodo.n}">
+                                        ${nodo.n.replace('Gas_', '').replace('_', ' ')}
+                                    </h3>
+                                    <p class="text-[7px] font-mono text-gray-500 uppercase tracking-widest mt-1">NODO BD: ${nodo.n}</p>
+                                </div>
+                                <div id="badge-${nodo.n}" class="text-[7px] font-black px-3 py-1.5 rounded-full border tracking-widest transition-all duration-300 ${badgeClass}">${badgeText}</div>
+                            </div>
+
+                            <!-- Graphic Illustration -->
+                            ${displayGraphic}
+
+                            <div class="w-full z-10 mt-3">
+                                <div class="flex justify-between items-center text-[7px] text-gray-500 uppercase font-black tracking-widest mb-1">
+                                    <span>${limitLow} ${nodo.u || ''}</span>
+                                    <span class="text-red-500">AL ${limitAlert} ${nodo.u || ''}</span>
+                                </div>
+                                <div class="gas-bar-container">
+                                    <div class="gas-bar-fill" id="bar-${nodo.n}" style="width: ${currentPercent}%"></div>
+                                </div>
+                            </div>
+                            
+                            <!-- Current Loop Diagnostics -->
+                            <div class="w-full mt-4 flex gap-2">
+                                <button onclick="document.getElementById('diag-${nodo.n}').classList.toggle('hidden')" class="flex-1 py-2 bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 text-[8px] font-black uppercase text-gray-400 transition-all z-10">Lazo 4-20mA</button>
+                            </div>
+                            
+                            <div id="diag-${nodo.n}" class="hidden absolute inset-x-6 bottom-6 p-4 bg-black/95 border border-blue-500/30 rounded-2xl z-20 text-center flex flex-col justify-center items-center shadow-2xl backdrop-blur-xl">
+                                <div class="text-[8px] text-gray-500 uppercase font-black tracking-widest mb-1">Corriente Lazo Analógico</div>
+                                <div class="text-lg text-blue-400 font-mono font-black" id="ma-${nodo.n}">${currentMa.toFixed(2)} mA</div>
+                                <button onclick="document.getElementById('diag-${nodo.n}').classList.add('hidden')" class="mt-2 text-[7px] font-black uppercase text-gray-600 hover:text-white">Cerrar</button>
+                            </div>
+                        </div>
+                    `;
+                }
+            }).join('');
+
+            updateMetrics();
+        }
+
+        function updateMetrics() {
+            const totalNodes = dbNodes.length;
+            const analogNodes = dbNodes.filter(n => n.m === 'REAL' || n.m === 'INT').length;
+            const binaryNodes = dbNodes.filter(n => n.m === 'BOOL').length;
+
+            let activeAlarms = 0;
+            dbNodes.forEach(n => {
+                if (n.m === 'REAL' || n.m === 'INT') {
+                    const val = parseFloat(n.val);
+                    if (val >= parseFloat(n.lh || 100) || val <= parseFloat(n.ll || 0)) {
+                        activeAlarms++;
+                    }
+                }
+            });
+
+            let health = 100;
+            if (totalNodes > 0) {
+                health = Math.round(100 - (activeAlarms / totalNodes) * 100);
+                health = Math.max(0, Math.min(100, health));
+            }
+
+            const totalNodesEl = document.getElementById('stat-total-nodes');
+            const analogNodesEl = document.getElementById('stat-analog-nodes');
+            const binaryNodesEl = document.getElementById('stat-binary-nodes');
+            const activeAlarmsEl = document.getElementById('stat-active-alarms');
+            const globalHealthEl = document.getElementById('stat-global-health');
+
+            if (totalNodesEl) totalNodesEl.innerText = totalNodes;
+            if (analogNodesEl) analogNodesEl.innerText = analogNodes;
+            if (binaryNodesEl) binaryNodesEl.innerText = binaryNodes;
+            if (activeAlarmsEl) {
+                activeAlarmsEl.innerText = activeAlarms;
+                if (activeAlarms > 0) {
+                    activeAlarmsEl.className = 'text-3xl font-black text-red-500 animate-pulse mt-2';
+                } else {
+                    activeAlarmsEl.className = 'text-3xl font-black text-white mt-2';
+                }
+            }
+            if (globalHealthEl) {
+                globalHealthEl.innerText = `${health}%`;
+                if (health < 80) {
+                    globalHealthEl.className = 'text-3xl font-black text-red-500 animate-pulse mt-2';
+                } else if (health < 95) {
+                    globalHealthEl.className = 'text-3xl font-black text-yellow-500 mt-2';
+                } else {
+                    globalHealthEl.className = 'text-3xl font-black text-green-400 mt-2';
+                }
+            }
+        }
+
+        async function enviarComandoActuador(sensorId, valor) {
+            const accion = valor === 1 ? 'ARRANCAR' : 'PARAR';
+            if (!confirm(`⚠️ PRECAUCIÓN DE SEGURIDAD:\n¿Confirma que desea ${accion} físicamente el equipo ${sensorId}?`)) {
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/telecontrol/escribir', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sensor: sensorId, valor: valor })
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    UIUtils.showToast(`Comando Manual enviado: ${valor === 1 ? 'ARRANCAR' : 'PARAR'}`, 'success');
+                } else {
+                    UIUtils.showToast(data.error || 'Error enviando comando', 'error');
+                }
+            } catch (e) {
+                UIUtils.showToast('Error de red enviando comando', 'error');
+            }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                document.querySelectorAll("div[id^='diag-']").forEach(el => el.classList.add('hidden'));
+            }
+        });
+
+        window.onload = init;
+    </script>
+</body>
+</html>

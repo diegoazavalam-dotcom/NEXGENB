@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, render_template, jsonify, request, session, send_file, redirect, url_for
 from werkzeug.utils import secure_filename
 import pandas as pd
@@ -9,9 +12,28 @@ from urllib.parse import unquote
 from functools import wraps
 
 # --- IMPORTACIONES LOCALES ---
+import sys
+import io
+import os
+from dotenv import load_dotenv
+from flask_socketio import SocketIO
+
+load_dotenv() # Carga las variables de entorno del archivo .env
+
+# SOLUCIÓN CRÍTICA PARA EMOJIS EN WINDOWS CMD / PYINSTALLER (.exe)
+if sys.stdout is None or not hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout = io.StringIO()
+    sys.stderr = io.StringIO()
+else:
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 import database  
 from config import SENSORES
-from sensor_gateway import SensorGateway 
+# Microservicio decoupled 
 from license_manager import verificar_licencia
 from config_manager import leer_config_maestra, guardar_config_maestra
 
@@ -21,8 +43,10 @@ ESTADO_LICENCIA = {"revisado_en": None, "data": None}
 # 1. LEER LA CONFIGURACIÓN MAESTRA
 CONFIG_SISTEMA = leer_config_maestra()
 
-# Tu contraseña secreta de integrador (cámbiala por algo seguro)
-GOD_MODE_TOKEN = "LeoyZoe0822"
+import secrets
+
+# Tu contraseña secreta de integrador. Se lee de entorno. Si no existe, genera una aleatoria fuerte.
+GOD_MODE_TOKEN = os.environ.get("GOD_MODE_TOKEN", secrets.token_urlsafe(32))
 
 # Configuración de alertas
 try:
@@ -31,23 +55,90 @@ except ImportError:
     alerts = None
 
 app = Flask(__name__)
-#app.secret_key = 'CLAVE_SECRETA_SCADA' 
-app.secret_key = "12345_NEXGEN_FIXED"
+# Genera una clave segura en memoria si no se provee en el entorno
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 app.permanent_session_lifetime = timedelta(days=7)
 
 # --- CONFIGURACIÓN ---
-MODO_PRODUCCION = True  
-DB_NAME = 'nexgen_v5_3.db'
+MODO_PRODUCCION = not CONFIG_SISTEMA.get('plc', {}).get('simulacion', False)  
+
+# --- PROXY DEL MICROSERVICIO DE TELEMETRÍA ---
+import requests
+class GatewayProxy:
+    def __init__(self):
+        self.drivers = {"proxy": self}
+        self.sensores_config = []
+        self.modo_produccion = False
+        
+    @property
+    def driver(self): return self
+    
+    def actualizar_conexion(self, ip): pass
+    def start(self): pass
+        
+    def cargar_configuracion(self, sensores):
+        self.sensores_config = sensores
+        try: requests.post("http://127.0.0.1:5006/reload_config", timeout=1)
+        except: pass
+
+    def get_connection_status(self):
+        try: return requests.get("http://127.0.0.1:5006/status", timeout=1).json().get("alive", False)
+        except: return False
+
+    def get_connected_status(self):
+        return self.get_connection_status()
+
+    def escribir_valor(self, nombre, valor):
+        try: return requests.post("http://127.0.0.1:5006/write", json={"sensor": nombre, "valor": valor}, timeout=2).json().get("success", False)
+        except: return False
+
+    def escribir_sensor(self, db, offset, tipo, valor):
+        try: return requests.post("http://127.0.0.1:5006/write_sensor", json={"db": db, "offset": offset, "tipo": tipo, "valor": valor}, timeout=2).json().get("success", False)
+        except: return False
+        
+    def leer_sensor(self, db, offset, tipo):
+        try: return requests.post("http://127.0.0.1:5006/read", json={"db": db, "offset": offset, "tipo": tipo}, timeout=1).json().get("val")
+        except: return None
 
 # INICIALIZACIÓN DEL GATEWAY (Patrón Singleton)
-# Nota: La inyección de IP se debe hacer dentro de SensorGateway en tu V1.1
-gateway = SensorGateway(modo_produccion=MODO_PRODUCCION)
+socketio = SocketIO(app, async_mode='eventlet')
+gateway = GatewayProxy()
+gateway.socketio = socketio
+
+# --- RATE LIMITING (MITIGACIÓN DoS) ---
+import time
+RATE_LIMITS = {}
+
+def rate_limit(max_requests, window_seconds):
+    def decorator(f):
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            ip = request.remote_addr
+            now = time.time()
+            if ip not in RATE_LIMITS:
+                RATE_LIMITS[ip] = []
+            RATE_LIMITS[ip] = [t for t in RATE_LIMITS[ip] if now - t < window_seconds]
+            if len(RATE_LIMITS[ip]) >= max_requests:
+                return jsonify({"error": "Demasiadas peticiones. Rate Limiting activado."}), 429
+            RATE_LIMITS[ip].append(now)
+            return f(*args, **kwargs)
+        return wrapped
+    return decorator
 
 # --- DECORADOR DE SEGURIDAD (FIX) ---
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # Verificamos user_id que es lo que seteamos en el login
+        # 1. Validación M2M vía API Key
+        api_key = request.headers.get('X-API-Key')
+        if api_key and api_key == GOD_MODE_TOKEN:
+            session['user_id'] = 0
+            session['username'] = 'M2M_Service'
+            session['role'] = 'ADMIN_TOTAL'
+            session['grupo'] = 'SISTEMAS'
+            return f(*args, **kwargs)
+
+        # 2. Validación estándar de HMI
         if 'user_id' not in session:
             if request.path.startswith('/api/'):
                 return jsonify({"status": "error", "message": "Sesion expirada"}), 401
@@ -63,6 +154,7 @@ def vista_god_mode():
 
 @app.route('/api/godmode/config', methods=['GET', 'POST'])
 def god_mode_config():
+    global MODO_PRODUCCION
     # 1. VERIFICACIÓN DE SEGURIDAD
     token_recibido = request.headers.get('X-GodMode-Token')
     if token_recibido != GOD_MODE_TOKEN:
@@ -73,22 +165,103 @@ def god_mode_config():
         config_actual = leer_config_maestra()
         return jsonify(config_actual)
 
+@app.route('/api/godmode/download_agent')
+def godmode_download_agent():
+    # Permite descargar el agente Python para el Linux
+    from flask import send_file
+    import os
+    ruta_agente = os.path.join(app.root_path, 'snmp_covert_agent.py')
+    if os.path.exists(ruta_agente):
+        return send_file(ruta_agente, as_attachment=True, download_name="agente_zole_linux.py")
+    return jsonify({"error": "Agente no encontrado en el servidor"}), 404
+
+@app.route('/api/godmode/update_agent', methods=['GET', 'POST'])
+def godmode_update_agent():
+    token_recibido = request.headers.get('X-GodMode-Token')
+    if token_recibido != GOD_MODE_TOKEN:
+        return jsonify({"error": "Acceso denegado"}), 403
+    
+    import database
+    
+    if request.method == 'GET':
+        # Devolver configuración de telegram TI
+        tg = database.config_telegram('get', bot_type='ti') or {"token": "", "chat_id": "", "activo": 0}
+        
+        # Obtener IP actual de un sensor
+        conn = database.get_db_connection()
+        ip = "127.0.0.1"
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id_conexion FROM configuracion_sensores WHERE nombre_sensor = 'Linux_CPU_Usage'")
+                res = cur.fetchone()
+                if res: ip = str(res[0]).split(":")[0]
+        finally:
+            database.release_db_connection(conn)
+
+        return jsonify({"ip": ip, "telegram": tg})
+
+    # METODO POST: Guardar
+    data = request.json
+    ip = data.get('ip', '127.0.0.1')
+    puerto = data.get('puerto', 161)
+    id_conexion = f"{ip}:{puerto}"
+
+    limites = data.get('limites', {})
+    cpu_h = float(limites.get('cpu_h', 95))
+    cpu_l = float(limites.get('cpu_l', 0))
+    ram_h = float(limites.get('ram_h', 90))
+    ram_l = float(limites.get('ram_l', 0))
+    disk_h = float(limites.get('disk_h', 95))
+    disk_l = float(limites.get('disk_l', 0))
+
+    tg_data = data.get('telegram', {})
+
+    try:
+        conn = database.get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("UPDATE configuracion_sensores SET id_conexion = %s, limite_alto=%s, limite_bajo=%s WHERE nombre_sensor = 'Linux_CPU_Usage'", (id_conexion, cpu_h, cpu_l))
+            cur.execute("UPDATE configuracion_sensores SET id_conexion = %s, limite_alto=%s, limite_bajo=%s WHERE nombre_sensor = 'Linux_RAM_Usage'", (id_conexion, ram_h, ram_l))
+            cur.execute("UPDATE configuracion_sensores SET id_conexion = %s, limite_alto=%s, limite_bajo=%s WHERE nombre_sensor = 'Linux_Disk_Usage'", (id_conexion, disk_h, disk_l))
+        conn.commit()
+        database.release_db_connection(conn)
+        
+        # Guardar Telegram TI
+        database.config_telegram('set', tg_data, bot_type='ti')
+        
+        # Notificamos a alerts.py que recargue caché
+        import alerts
+        alerts.recargar_config()
+        
+        return jsonify({"status": "ok", "message": "Métricas y Telegram TI actualizados"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
     # 3. SI ES UN POST: Guardamos y aplicamos Hot Reload
     if request.method == 'POST':
         nueva_data = request.json
         if guardar_config_maestra(nueva_data):
             
             # 🔥 HOT RELOAD DEL PLC SIN REINICIAR 🔥
-            # Navegamos dentro del JSON: nueva_data -> 'plc' -> 'ip'
             datos_plc = nueva_data.get('plc', {})
             nueva_ip = datos_plc.get('ip')
+            simulacion = datos_plc.get('simulacion', False)
             
-            # Verificamos que el gateway tenga el driver cargado y le pasamos la IP
+            MODO_PRODUCCION = not simulacion
+            gateway.modo_produccion = MODO_PRODUCCION
+            
+            for d in gateway.drivers.values():
+                d.simulation = simulacion
+                if simulacion:
+                    d.conectar()
+                else:
+                    d.desconectar()
+            
+            # Verificamos que el gateway tenga el driver cargado y le pasamos la IP (legacy code)
             if nueva_ip and hasattr(gateway, 'driver') and hasattr(gateway.driver, 'actualizar_conexion'):
                 print(f"⚡ Ejecutando Hot Reload hacia IP: {nueva_ip}")
                 gateway.driver.actualizar_conexion(nueva_ip)
                 
-            # Opcional: Recargar los sensores si se modificaron desde GodMode
+            # Recargar los sensores si se modificaron desde GodMode
             sensores_db = database.leer_configuracion_sensores()
             if sensores_db:
                 gateway.cargar_configuracion(sensores_db)
@@ -112,9 +285,16 @@ def escudo_licencia():
     global ESTADO_LICENCIA
     ahora = datetime.now()
     
-    # ⚠️ MODO DE PRUEBA: Lee el archivo físico en CADA clic (Caché desactivado)
-    ESTADO_LICENCIA["data"] = verificar_licencia()
-    ESTADO_LICENCIA["revisado_en"] = ahora
+    # 🚀 OPTIMIZACIÓN: Caché de 30 minutos para evitar I/O y desencriptación en CADA request
+    if ESTADO_LICENCIA.get("revisado_en"):
+        if (ahora - ESTADO_LICENCIA["revisado_en"]).total_seconds() < 1800:
+            pass # Usamos el caché actual en memoria
+        else:
+            ESTADO_LICENCIA["data"] = verificar_licencia()
+            ESTADO_LICENCIA["revisado_en"] = ahora
+    else:
+        ESTADO_LICENCIA["data"] = verificar_licencia()
+        ESTADO_LICENCIA["revisado_en"] = ahora
     
     print(f"🕵️ [ESCUDO] Evaluando ruta: {request.path}")
     print(f"📊 [ESCUDO] Datos de la llave: {ESTADO_LICENCIA['data']}")
@@ -157,12 +337,107 @@ def upload_license():
 # --- RUTAS DE NAVEGACIÓN Y STATUS ---
 @app.route('/')
 def index(): 
-    return render_template('index.html', modo_produccion=MODO_PRODUCCION)
+    global ESTADO_LICENCIA
+    lic_info = ESTADO_LICENCIA.get("data", {})
+    dias_restantes = lic_info.get("dias_restantes", 999)
+    return render_template('index.html', modo_produccion=MODO_PRODUCCION, dias_licencia=dias_restantes)
 
 @app.route('/dashboard')
 @login_required
 def dashboard():
     return render_template('dashboard.html', modo_produccion=MODO_PRODUCCION)
+
+@app.route('/extractores')
+@login_required
+def extractores():
+    import json
+    return render_template('extractores.html', modo_produccion=MODO_PRODUCCION, role=session.get('role'))
+
+@app.route('/api/extractores/config', methods=['GET', 'POST'])
+@login_required
+def api_extractores_config():
+    import json
+    file_path = os.path.join(app.root_path, 'extractores.json')
+    if request.method == 'GET':
+        if not os.path.exists(file_path):
+            return jsonify([])
+        with open(file_path, 'r') as f:
+            return jsonify(json.load(f))
+    else:
+        if session.get('role') not in ['SUPER_ADMIN', 'ADMIN_TOTAL', 'SUPERADMIN', 'ADMIN']:
+            return jsonify({"error": "No autorizado"}), 403
+        with open(file_path, 'w') as f:
+            json.dump(request.json, f, indent=4)
+        return jsonify({"status": "success"})
+
+@app.route('/api/extractores/estado')
+@login_required
+def api_extractores_estado():
+    import json
+    file_path = os.path.join(app.root_path, 'extractores.json')
+    if not os.path.exists(file_path): return jsonify([])
+    with open(file_path, 'r') as f:
+        zonas = json.load(f)
+    
+    estados = []
+    driver = list(gateway.drivers.values())[0] if gateway.drivers else None
+
+    for zona in zonas:
+        for ex in zona.get("extractores", []):
+            db = int(ex.get("db_number", 100))
+            if driver and driver.get_connected_status():
+                running = driver.leer_sensor(db, ex.get("offset_running", 0.0), 'BOOL') == 1
+                fault = driver.leer_sensor(db, ex.get("offset_fault", 0.1), 'BOOL') == 1
+                mode_auto = driver.leer_sensor(db, ex.get("offset_mode_auto", 0.4), 'BOOL') == 1
+            else:
+                running = False
+                fault = False
+                mode_auto = True
+                
+            estados.append({
+                "id": ex["id"],
+                "zona_id": zona["id"],
+                "running": running,
+                "modeAuto": mode_auto,
+                "fault": fault
+            })
+    return jsonify(estados)
+
+@app.route('/api/extractores/comando', methods=['POST'])
+@login_required
+def api_extractores_comando():
+    import json
+    data = request.json
+    ext_id = data.get('id')
+    cmd = data.get('cmd')
+    
+    file_path = os.path.join(app.root_path, 'extractores.json')
+    if not os.path.exists(file_path): return jsonify({"error": "Config not found"}), 404
+    
+    with open(file_path, 'r') as f: zonas = json.load(f)
+        
+    driver = list(gateway.drivers.values())[0] if gateway.drivers else None
+    if not driver: return jsonify({"error": "PLC No conectado"}), 503
+    
+    for zona in zonas:
+        for ex in zona.get("extractores", []):
+            if ex["id"] == ext_id:
+                db = int(ex.get("db_number", 100))
+                if cmd == 'START':
+                    driver.escribir_sensor(db, ex.get("offset_cmd_start", 0.2), 'BOOL', 1)
+                elif cmd == 'STOP':
+                    driver.escribir_sensor(db, ex.get("offset_cmd_stop", 0.3), 'BOOL', 1)
+                elif cmd == 'AUTO':
+                    driver.escribir_sensor(db, ex.get("offset_mode_auto", 0.4), 'BOOL', 1)
+                elif cmd == 'MANUAL':
+                    driver.escribir_sensor(db, ex.get("offset_mode_auto", 0.4), 'BOOL', 0)
+                
+                # Opcional: Registrar evento
+                usuario = session.get('username', 'Sistema')
+                database.registrar_evento(usuario, 'TELECONTROL_EXTRACTOR', f"Envió {cmd} a {ext_id}")
+                return jsonify({"status": "success"})
+                
+    return jsonify({"error": "Extractor no encontrado"}), 404
 
 @app.route('/reports')
 @login_required
@@ -172,7 +447,7 @@ def reports():
 @app.route('/api/plc/status')
 def get_plc_status():
     """1. Consulta el estado al Gateway"""
-    is_alive = gateway.driver.get_connected_status()
+    is_alive = gateway.get_connection_status()
     return jsonify({
         "status": "ONLINE" if is_alive else "OFFLINE",
         "color": "text-green-500" if is_alive else "text-red-500",
@@ -192,6 +467,7 @@ def check_auth():
     return jsonify({"logged_in": False, "role": None})
 
 @app.route('/api/auth/login', methods=['POST'])
+@rate_limit(5, 60) # Máximo 5 intentos por minuto para evitar Brute-Force
 def login():
     try:
         data = request.json
@@ -409,8 +685,56 @@ def update_high_limit():
 @login_required
 def update_position():
     d = request.json
-    if database.actualizar_posicion_hmi(d['n'], d['x'], d['y']): return jsonify({"status": "success"})
+    if database.actualizar_posicion_hmi(d['n'], d['x'], d['y']):
+        # FIX: Sincronizar el caché en RAM del Gateway para que los WebSockets no reviertan la posición
+        for cfg in gateway.sensores_config:
+            if cfg.get('nombre_sensor') == d['n'] or cfg.get('n') == d['n']:
+                cfg['x'] = d['x']
+                cfg['y'] = d['y']
+                break
+        gateway.cargar_configuracion(gateway.sensores_config)
+        return jsonify({"status": "success"})
     return jsonify({"error": "Error DB"}), 500
+
+# --- TELECONTROL (ESCRITURA A PLC) ---
+@app.route('/api/telecontrol/escribir', methods=['POST'])
+@login_required
+def route_escribir_plc():
+    try:
+        data = request.json
+        nombre = data.get('sensor')
+        valor = data.get('valor')
+        
+        if nombre is None or valor is None:
+            return jsonify({"error": "Faltan parámetros 'sensor' o 'valor'"}), 400
+
+        # Verificación básica de seguridad de rol
+        rol_usuario = session.get('role', '')
+        if rol_usuario not in ['ADMIN_TOTAL', 'ADMIN_SCADA', 'OPERADOR_AVANZADO', 'SUPERADMIN', 'ADMIN']:
+            return jsonify({"error": "Permisos insuficientes para telecontrol"}), 403
+
+        # Escribimos usando el Gateway
+        exito = gateway.escribir_valor(nombre, valor)
+        
+        if exito:
+            usuario = session.get('username', 'Sistema')
+            database.registrar_evento(usuario, 'TELECONTROL', f"Escribió valor {valor} en {nombre}")
+            return jsonify({"status": "success", "message": "Comando enviado al PLC"})
+        else:
+            return jsonify({"error": "Fallo al escribir en el PLC (Verifica conexión y configuración)"}), 500
+    except Exception as e:
+        print(f"🔥 Error en Telecontrol: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# --- COMUNICACIÓN INTER-MICROSERVICIOS (NUEVO) ---
+@app.route('/api/internal/telemetry_broadcast', methods=['POST'])
+def internal_broadcast():
+    """Recibe datos del Microservicio del Gateway Independiente y los emite al HMI Web"""
+    if request.remote_addr != '127.0.0.1':
+        return jsonify({"error": "Unauthorized"}), 403
+    payload = request.json
+    socketio.emit('telemetria_update', payload)
+    return jsonify({"status": "ok"})
 
 @app.route('/api/admin/telegram', methods=['GET', 'POST'])
 @login_required
@@ -425,8 +749,44 @@ def telegram_route():
         return jsonify({"status": "success"})
     return jsonify({"error": "Error DB"}), 500
 
-# --- MANTENIMIENTO E INCIDENCIAS ---
-@app.route('/api/incidencias/recientes')
+# --- GESTIÓN DE INCIDENCIAS E ISA-18.2 ---
+@app.route('/api/alarmas/isa182', methods=['GET'])
+@login_required
+def get_alarmas_isa():
+    try:
+        alarmas = database.obtener_alarmas_isa182()
+        return jsonify(alarmas)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/alarmas/ack', methods=['POST'])
+@login_required
+def ack_alarma():
+    try:
+        data = request.json
+        user = session.get('username')
+        alarma_id = data.get('id')
+        if database.reconocer_alarma(alarma_id, user):
+            return jsonify({"success": True})
+        return jsonify({"success": False, "error": "Error al reconocer"}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/alarmas/shelve', methods=['POST'])
+@login_required
+def shelve_alarma():
+    try:
+        data = request.json
+        user = session.get('username')
+        alarma_id = data.get('id')
+        horas = float(data.get('horas', 4))
+        if database.aparcar_alarma(alarma_id, user, horas):
+            return jsonify({"success": True})
+        return jsonify({"success": False, "error": "Error al aparcar"}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/incidencias/pendientes', methods=['GET'])
 @login_required
 def route_incidencias_recientes():
     pagina = request.args.get('p', 1, type=int)
@@ -664,7 +1024,11 @@ def download_backup():
     }), 400
 
 @app.route('/reparar_db')
+@login_required
 def reparar_db():
+    # FIX SEGURIDAD: Solo administradores totales pueden destruir la base de datos
+    if session.get('role') not in ['ADMIN_TOTAL', 'SUPERADMIN']:
+        return "<h1>❌ Acceso Denegado</h1><p>Solo el administrador total puede reparar la BD.</p>", 403
     conn = database.get_db_connection()
     try:
         with conn.cursor() as cur:
@@ -697,7 +1061,14 @@ if __name__ == '__main__':
         ruta_img = os.path.join(base_dir, 'static', 'img')
         os.makedirs(ruta_img, exist_ok=True)
         
-        # 2. Inicialización de Base de Datos
+        # 2. Asistente de Instalación y Validación (Tkinter GUI)
+        import startup_wizard
+        import database
+        if not os.environ.get('DOCKER_ENV'):
+            if not startup_wizard.check_and_wizard(database.DB_CONFIG):
+                sys.exit(1)
+            
+        # 3. Inicialización de Base de Datos
         database.init_db()
         database.init_incidencias_db()
         
@@ -711,8 +1082,13 @@ if __name__ == '__main__':
         print("🚀 Motor SCADA Iniciado correctamente.")
         print("🌐 Servidor web escuchando en http://localhost:5005")
         
-        # IMPORTANTE: debug=False es OBLIGATORIO en la versión compilada
-        app.run(debug=False, host='0.0.0.0', port=5005, use_reloader=False)
+        # Verificamos si existen los certificados TLS
+        if os.path.exists('cert.pem') and os.path.exists('key.pem'):
+            print("🔒 Arrancando servidor en modo seguro TLS nativo (HTTPS/WSS) en el puerto 5005")
+            socketio.run(app, debug=False, host='0.0.0.0', port=5005, use_reloader=False, certfile='cert.pem', keyfile='key.pem')
+        else:
+            print("⚠️ Arrancando servidor sin TLS (HTTP/WS) en el puerto 5005")
+            socketio.run(app, debug=False, host='0.0.0.0', port=5005, use_reloader=False)
 
     except Exception as e:
         # 🔥 EL ESCUDO ANTI-CIERRE 🔥

@@ -1,0 +1,26 @@
+FROM python:3.10-slim
+
+# Instalar dependencias del sistema requeridas para Snap7 y PostgreSQL
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libsnap7-dev \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copiamos primero requirements
+COPY requirements.txt .
+
+# Instalamos requerimientos
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir Flask eventlet psycopg2-binary requests python-snap7 python-dotenv
+
+# Copiar el resto del código
+COPY . .
+
+# Exponer el puerto del Gateway Webhooks locales
+EXPOSE 5006
+
+# Comando de arranque
+CMD ["python", "gateway_service.py"]

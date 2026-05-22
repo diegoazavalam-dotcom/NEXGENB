@@ -16,30 +16,30 @@ def recargar_config():
     global _config_cache
     _config_cache["last_update"] = 0 # Forzamos a que obtener_config_rapida consulte la DB
 
-def obtener_config_rapida():
-    """Recupera la config de la DB solo si ha pasado tiempo o se forzó la actualización"""
+def obtener_config_rapida(bot_type='operativo'):
     global _config_cache 
     ahora = time.time()
     
+    if bot_type not in _config_cache:
+        _config_cache[bot_type] = {"token": None, "chat_id": None, "activo": 0, "last_update": 0}
+
     # Si han pasado más de 30 segundos, refrescamos desde la DB (PostgreSQL)
-    if (ahora - _config_cache["last_update"]) > 30 or not _config_cache.get("token"):
+    if (ahora - _config_cache[bot_type]["last_update"]) > 30 or not _config_cache[bot_type].get("token"):
         try:
-            # Reutilizamos la función que ya existe en tu database.py
-            conf = database.config_telegram('get')
+            conf = database.config_telegram('get', bot_type=bot_type)
             if conf:
-                _config_cache["token"] = conf.get('token')
-                _config_cache["chat_id"] = conf.get('chat_id')
-                _config_cache["activo"] = conf.get('activo', 0)
-                _config_cache["last_update"] = ahora
-                # print("📡 [ALERTS] Caché de Telegram actualizada.", flush=True)
+                _config_cache[bot_type]["token"] = conf.get('token')
+                _config_cache[bot_type]["chat_id"] = conf.get('chat_id')
+                _config_cache[bot_type]["activo"] = conf.get('activo', 0)
+                _config_cache[bot_type]["last_update"] = ahora
         except Exception as e:
             print(f"❌ [ALERTS] Error refrescando caché: {e}")
             
-    return _config_cache
+    return _config_cache[bot_type]
 
-def _enviar_telegram_async(msg):
+def _enviar_telegram_async(msg, bot_type='operativo'):
     """Envía el mensaje en un hilo separado para no bloquear el PLC"""
-    conf = obtener_config_rapida()
+    conf = obtener_config_rapida(bot_type)
     
     token = conf.get("token")
     chat_id = conf.get("chat_id")
@@ -108,7 +108,9 @@ def procesar_alerta_banda(nombre, valor, l_bajo, l_alto, unidad):
                    f"Valor: {v} {unidad}\n"
                    f"Umbral: {umbral} {unidad}")
             
-            _enviar_telegram_async(msg)
+            # Si el nombre empieza con Linux_, enviamos al canal de TI
+            bot_t = 'ti' if nombre.startswith('Linux_') else 'operativo'
+            _enviar_telegram_async(msg, bot_type=bot_t)
             # Actualizamos la marca de tiempo
             historial_alertas[nombre] = ahora
 
@@ -119,7 +121,8 @@ def procesar_alerta_banda(nombre, valor, l_bajo, l_alto, unidad):
                f"Sensor: {nombre}\n"
                f"El valor {v} {unidad} ha regresado al rango operativo seguro.")
         
-        _enviar_telegram_async(msg)
+        bot_t = 'ti' if nombre.startswith('Linux_') else 'operativo'
+        _enviar_telegram_async(msg, bot_type=bot_t)
         # Limpiamos el historial para que pueda volver a alertar si falla de nuevo
         del historial_alertas[nombre]
 

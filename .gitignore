@@ -16,3 +16,25 @@ license.key
 # Configuración sensible y logs
 *.log
 .env
+
+# PyInstaller and packaging
+build/
+dist/
+dist_old/
+*.spec
+*.zip
+NexGen_SCADA_V7_Installer/
+
+# Local certs and keys
+*.pem
+
+# Security and audit reports
+bandit_report*.json
+bandit_report*.txt
+safety_report.txt
+
+# Patches and temp diffs
+*.patch
+
+# Temp / local development junk files
+temp_*

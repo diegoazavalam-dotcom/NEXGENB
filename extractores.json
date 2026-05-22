@@ -1,0 +1,42 @@
+[
+    {
+        "id": "ZONA_BODEGA_1",
+        "name": "Bodega Zona Norte",
+        "gas_sensor_id": "Gas_Honeywell_1",
+        "limite_alarma": 20.0,
+        "extractores": [
+            { "id": "EXT-01", "name": "Extractor 1 (Par 1)", "db_number": 100, "offset_running": 0.0, "offset_fault": 0.1, "offset_cmd_start": 0.2, "offset_cmd_stop": 0.3, "offset_mode_auto": 0.4 },
+            { "id": "EXT-02", "name": "Extractor 2 (Par 1)", "db_number": 100, "offset_running": 1.0, "offset_fault": 1.1, "offset_cmd_start": 1.2, "offset_cmd_stop": 1.3, "offset_mode_auto": 1.4 }
+        ]
+    },
+    {
+        "id": "ZONA_BODEGA_2",
+        "name": "Bodega Zona Sur",
+        "gas_sensor_id": "Gas_Honeywell_2",
+        "limite_alarma": 20.0,
+        "extractores": [
+            { "id": "EXT-03", "name": "Extractor 3 (Par 2)", "db_number": 100, "offset_running": 2.0, "offset_fault": 2.1, "offset_cmd_start": 2.2, "offset_cmd_stop": 2.3, "offset_mode_auto": 2.4 },
+            { "id": "EXT-04", "name": "Extractor 4 (Par 2)", "db_number": 100, "offset_running": 3.0, "offset_fault": 3.1, "offset_cmd_start": 3.2, "offset_cmd_stop": 3.3, "offset_mode_auto": 3.4 }
+        ]
+    },
+    {
+        "id": "ZONA_BODEGA_3",
+        "name": "Bodega Zona Este",
+        "gas_sensor_id": "Gas_Honeywell_3",
+        "limite_alarma": 20.0,
+        "extractores": [
+            { "id": "EXT-05", "name": "Extractor 5 (Par 3)", "db_number": 100, "offset_running": 4.0, "offset_fault": 4.1, "offset_cmd_start": 4.2, "offset_cmd_stop": 4.3, "offset_mode_auto": 4.4 },
+            { "id": "EXT-06", "name": "Extractor 6 (Par 3)", "db_number": 100, "offset_running": 5.0, "offset_fault": 5.1, "offset_cmd_start": 5.2, "offset_cmd_stop": 5.3, "offset_mode_auto": 5.4 }
+        ]
+    },
+    {
+        "id": "ZONA_BODEGA_4",
+        "name": "Bodega Zona Oeste",
+        "gas_sensor_id": "Gas_Honeywell_4",
+        "limite_alarma": 20.0,
+        "extractores": [
+            { "id": "EXT-07", "name": "Extractor 7 (Par 4)", "db_number": 100, "offset_running": 6.0, "offset_fault": 6.1, "offset_cmd_start": 6.2, "offset_cmd_stop": 6.3, "offset_mode_auto": 6.4 },
+            { "id": "EXT-08", "name": "Extractor 8 (Par 4)", "db_number": 100, "offset_running": 7.0, "offset_fault": 7.1, "offset_cmd_start": 7.2, "offset_cmd_stop": 7.3, "offset_mode_auto": 7.4 }
+        ]
+    }
+]

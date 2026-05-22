@@ -1,0 +1,26 @@
+FROM python:3.10-slim
+
+# Instalar dependencias del sistema requeridas para Snap7 y PostgreSQL
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libsnap7-dev \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copiamos primero requirements para aprovechar el cache de Docker
+COPY requirements.txt .
+
+# Instalamos los requirements base y forzamos las dependencias necesarias de microservicios
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir Flask-SocketIO eventlet gunicorn python-dotenv psycopg2-binary pyopenssl requests xlrd openpyxl xlsxwriter pydantic Werkzeug
+
+# Copiar el resto del código
+COPY . .
+
+# Exponer el puerto TLS
+EXPOSE 5005
+
+# Comando de arranque (Producción con Gunicorn y Eventlet)
+CMD ["gunicorn", "-k", "eventlet", "-w", "4", "--bind", "0.0.0.0:5005", "--certfile", "cert.pem", "--keyfile", "key.pem", "app:app"]

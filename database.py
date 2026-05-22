@@ -9,18 +9,18 @@ from werkzeug.security import generate_password_hash, check_password_hash
 # --- CONFIGURACIÓN CENTRALIZADA POSTGRES ---
 # Ajusta estos valores a tu configuración de pgAdmin4
 DB_CONFIG = {
-    "host": "localhost",
-    "database": "nexgen_v7",
-    "user": "postgres",
-    "password": "Root123",  # <--- IMPORTANTE: COLOCA TU CONTRASEÑA
-    "port": "5432",
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "database": os.environ.get("DB_NAME", "nexgen_v7"),
+    "user": os.environ.get("DB_USER", "postgres"),
+    "password": os.environ.get("DB_PASS", ""),
+    "port": os.environ.get("DB_PORT", "5432"),
     "client_encoding": "utf8"
 }
 
 # --- GESTIÓN DEL POOL DE CONEXIONES ---
 try:
-    # Creamos un pool de conexiones (Min: 5, Max: 40) para alta concurrencia
-    post_pool = psycopg2.pool.SimpleConnectionPool(5, 40, **DB_CONFIG)
+    # Creamos un pool de conexiones (Min: 20, Max: 200) para alta concurrencia
+    post_pool = psycopg2.pool.SimpleConnectionPool(20, 200, **DB_CONFIG)
     print("✅ DATABASE: Connection Pool de PostgreSQL establecido.")
 except Exception as e:
     print(f"🔥 Error Crítico al conectar con PostgreSQL: {e}")
@@ -129,9 +129,23 @@ def init_incidencias_db(conn=None):
                     sensor_id TEXT NOT NULL, valor_detectado REAL NOT NULL, umbral_limite REAL NOT NULL,
                     tipo TEXT DEFAULT 'ALTO', fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     atendido INTEGER DEFAULT 0, comentario_cierre TEXT, usuario_cierre TEXT, fecha_cierre TIMESTAMP,
-                    metodo_cierre TEXT DEFAULT 'INDIVIDUAL'
+                    metodo_cierre TEXT DEFAULT 'INDIVIDUAL',
+                    prioridad TEXT DEFAULT 'ALTA',
+                    estado_ack TEXT DEFAULT 'UNACK',
+                    usuario_ack TEXT,
+                    fecha_ack TIMESTAMP,
+                    shelved_until TIMESTAMP
                 )
             """)
+            # Hacemos ALTER TABLE por si la tabla ya existía de versiones previas
+            try:
+                cur.execute("ALTER TABLE log_incidencias ADD COLUMN IF NOT EXISTS prioridad TEXT DEFAULT 'ALTA'")
+                cur.execute("ALTER TABLE log_incidencias ADD COLUMN IF NOT EXISTS estado_ack TEXT DEFAULT 'UNACK'")
+                cur.execute("ALTER TABLE log_incidencias ADD COLUMN IF NOT EXISTS usuario_ack TEXT")
+                cur.execute("ALTER TABLE log_incidencias ADD COLUMN IF NOT EXISTS fecha_ack TIMESTAMP")
+                cur.execute("ALTER TABLE log_incidencias ADD COLUMN IF NOT EXISTS shelved_until TIMESTAMP")
+            except Exception as e_alter:
+                print(f"Nota: {e_alter}")
         conn.commit()
     finally:
         if local_conn: release_db_connection(conn)
@@ -417,18 +431,6 @@ def guardar_bloque_telemetria(datos):
     finally:
         release_db_connection(conn)
 
-def registrar_incidencia_db(sensor, valor, umbral, tipo="ALTO"):
-    conn = get_db_connection() # <--- Mover afuera del try
-    if not conn: return
-    try:
-        with conn.cursor() as cur:
-            cur.execute("INSERT INTO log_incidencias (sensor_id, valor_detectado, umbral_limite, tipo) VALUES (%s, %s, %s, %s)", (sensor, valor, umbral, tipo))
-        conn.commit()
-    except Exception as e: 
-        conn.rollback() 
-        print(f"❌ Error Audit: {e}")
-    finally:
-        release_db_connection(conn)
 
 # --- 4. USUARIOS Y AUTH ---
 
@@ -484,24 +486,26 @@ def gestionar_usuario(accion, u, p=None, r=None, g='PLANTA'):
 
 # --- 5. EXTRAS ---
 
-def config_telegram(accion, data=None):
+def config_telegram(accion, data=None, bot_type='operativo'):
     conn = get_db_connection()
     if not conn: return None
     try:
-        # Usamos RealDictCursor para mantener compatibilidad con el resto del sistema
+        target_id = 1 if bot_type == 'operativo' else 2
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Aseguramos que exista el registro
+            cur.execute("INSERT INTO config_telegram (id, token, chat_id, activo) VALUES (%s, '', '', 0) ON CONFLICT (id) DO NOTHING", (target_id,))
+            
             if accion == 'get':
-                cur.execute("SELECT token, chat_id, activo FROM config_telegram WHERE id=1")
+                cur.execute("SELECT token, chat_id, activo FROM config_telegram WHERE id=%s", (target_id,))
                 res = cur.fetchone()
                 return dict(res) if res else None
                 
             elif accion == 'set':
-                # CORRECCIÓN: Ejecutamos sobre 'cur' (el cursor), NO sobre 'conn'
                 cur.execute("""
                     UPDATE config_telegram 
                     SET token=%s, chat_id=%s, activo=%s 
-                    WHERE id=1
-                """, (data['token'], data['chat_id'], int(data['activo'])))
+                    WHERE id=%s
+                """, (data['token'], data['chat_id'], int(data.get('activo', 1)), target_id))
                 conn.commit()
                 return True
     except Exception as e:
@@ -723,6 +727,83 @@ def registrar_evento(usuario, accion, detalle):
         conn.commit()
     except Exception as e:
         print(f"⚠️ Error escribiendo auditoría: {e}")
+    finally:
+        release_db_connection(conn)
+
+def registrar_incidencia_db(sensor_id, valor, umbral, tipo='ALTO', prioridad='ALTA'):
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO log_incidencias 
+                (sensor_id, valor_detectado, umbral_limite, tipo, atendido, prioridad, estado_ack) 
+                VALUES (%s, %s, %s, %s, 0, %s, 'UNACK')
+            """, (sensor_id, valor, umbral, tipo, prioridad))
+        conn.commit()
+    except Exception as e:
+        print(f"❌ Error al registrar incidencia: {e}")
+    finally:
+        release_db_connection(conn)
+
+def reconocer_alarma(alarma_id, usuario):
+    """ISA-18.2: Reconocimiento (Acknowledge) de Alarma Activa"""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE log_incidencias 
+                SET estado_ack = 'ACK', usuario_ack = %s, fecha_ack = CURRENT_TIMESTAMP
+                WHERE id = %s AND estado_ack = 'UNACK'
+            """, (usuario, alarma_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"❌ Error al reconocer alarma {alarma_id}: {e}")
+        return False
+    finally:
+        release_db_connection(conn)
+
+def aparcar_alarma(alarma_id, usuario, horas_shelve):
+    """ISA-18.2: Supresión Temporal (Shelving) de Alarma"""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE log_incidencias 
+                SET shelved_until = CURRENT_TIMESTAMP + interval '%s hours',
+                    comentario_cierre = %s
+                WHERE id = %s AND atendido = 0
+            """, (horas_shelve, f"Aparcada por {usuario} ({horas_shelve}h)", alarma_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"❌ Error al aparcar alarma {alarma_id}: {e}")
+        return False
+    finally:
+        release_db_connection(conn)
+
+def obtener_alarmas_isa182():
+    """Devuelve las alarmas críticas actuales no cerradas y no silenciadas"""
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT * FROM log_incidencias 
+                WHERE atendido = 0 
+                AND (shelved_until IS NULL OR shelved_until < CURRENT_TIMESTAMP)
+                ORDER BY 
+                    CASE prioridad
+                        WHEN 'CRITICA' THEN 1
+                        WHEN 'ALTA' THEN 2
+                        WHEN 'MEDIA' THEN 3
+                        ELSE 4
+                    END,
+                    fecha DESC
+            """)
+            return cur.fetchall()
+    except Exception as e:
+        print(f"❌ Error al leer alarmas ISA-18.2: {e}")
+        return []
     finally:
         release_db_connection(conn)
 

@@ -9,22 +9,30 @@ const AuthWidget = {
     async login() {
         const u = document.getElementById('u').value;
         const p = document.getElementById('p').value;
-        if (!u || !p) return alert("⛔ Ingresa credenciales.");
+        if (!u || !p) return UIUtils.showToast("Ingresa credenciales", 'error');
+
+        if (typeof UIUtils !== 'undefined') UIUtils.setLoading('btn-login', true);
 
         try {
             const res = await fetch('/api/auth/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                credentials: 'include', 
-                body: JSON.stringify({ username: u, password: p }) 
+                body: JSON.stringify({ username: u, password: p })
             });
             const data = await res.json();
-            if (data.status === 'success') {
-                window.location.href = "/"; // Entra directo
+            
+            if (data.logged_in) {
+                if (typeof UIUtils !== 'undefined') UIUtils.showToast("Acceso Concedido", 'success');
+                setTimeout(() => window.location.reload(), 800);
             } else {
-                alert("⛔ " + data.message);
+                if (typeof UIUtils !== 'undefined') UIUtils.showToast(data.message || "Credenciales inválidas", 'error');
             }
-        } catch (e) { alert("❌ Error de conexión."); }
+        } catch (e) {
+            console.error(e);
+            if (typeof UIUtils !== 'undefined') UIUtils.showToast("Error de red", 'error');
+        } finally {
+            if (typeof UIUtils !== 'undefined') UIUtils.setLoading('btn-login', false);
+        }
     },
 
     // --- NUEVA FUNCIÓN LOGOUT ---

@@ -5,23 +5,35 @@ from datetime import datetime
 from cryptography.fernet import Fernet
 
 LLAVE_MAESTRA = b'lQv8_7mHk_Z3nQjB4xL_T9gP2wV5rF8yD1sC6mN4xQo='
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+import sys
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    
 LICENSE_FILE = os.path.join(BASE_DIR, 'license.key')
 SYS_TIME_FILE = os.path.join(BASE_DIR, '.sys_time')
 
 def obtener_hardware_id():
-    """Obtiene el UUID de la placa base en Windows."""
+    """Obtiene el UUID de la máquina (Soporta Windows y Linux/Docker)."""
     try:
-        output = subprocess.check_output("wmic csproduct get uuid", shell=True, stderr=subprocess.DEVNULL).decode()
-        uuid = output.split('\n')[1].strip()
-        if not uuid or uuid == 'FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF':
-            import winreg
-            registry = winreg.HKEY_LOCAL_MACHINE
-            address = r"SOFTWARE\Microsoft\Cryptography"
-            key = winreg.OpenKey(registry, address, 0, winreg.KEY_READ)
-            uuid, _ = winreg.QueryValueEx(key, "MachineGuid")
-            winreg.CloseKey(key)
-        return uuid
+        if os.name == 'nt':
+            output = subprocess.check_output("wmic csproduct get uuid", shell=True, stderr=subprocess.DEVNULL).decode()
+            uuid = output.split('\n')[1].strip()
+            if not uuid or uuid == 'FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF':
+                import winreg
+                registry = winreg.HKEY_LOCAL_MACHINE
+                address = r"SOFTWARE\Microsoft\Cryptography"
+                key = winreg.OpenKey(registry, address, 0, winreg.KEY_READ)
+                uuid, _ = winreg.QueryValueEx(key, "MachineGuid")
+                winreg.CloseKey(key)
+            return uuid
+        else:
+            if os.path.exists('/etc/machine-id'):
+                with open('/etc/machine-id', 'r') as f: return f.read().strip()
+            elif os.path.exists('/var/lib/dbus/machine-id'):
+                with open('/var/lib/dbus/machine-id', 'r') as f: return f.read().strip()
+            return "UNKNOWN_HWID"
     except Exception:
         return "UNKNOWN_HWID"
 
@@ -37,6 +49,16 @@ def verificar_tampering_reloj(hoy_str):
                 # Si la fecha de hoy es MENOR que la última fecha registrada, hubo tampering
                 if hoy_str < ultima_fecha_str:
                     return False
+        
+        # DEFENSA ADICIONAL: Si borran .sys_time, comparamos contra la fecha del código fuente principal
+        # Si el usuario atrasa el reloj más allá de la fecha en la que se instaló el sistema, se bloquea.
+        app_file = os.path.join(BASE_DIR, 'app.py')
+        if os.path.exists(app_file):
+            mtime = os.path.getmtime(app_file)
+            mtime_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+            if hoy_str < mtime_str:
+                print("🚫 [LICENCIA] Tampering detectado: El reloj es anterior a la fecha de instalación.")
+                return False
                     
         # Actualizamos la fecha máxima registrada
         with open(SYS_TIME_FILE, 'w') as file:

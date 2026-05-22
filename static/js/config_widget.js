@@ -89,9 +89,13 @@ const ConfigWidget = {
 
     // --- RECEPCIÓN DE DATOS EN VIVO ---
     update(sensores) {
-        this.sensoresCache = sensores; // Guardamos para la edición
+        this.sensoresCache = sensores; 
         const tbody = document.getElementById('tabla-sensores-body');
         if (!tbody) return;
+
+        if (!this.sensorHistory) this.sensorHistory = {};
+        if (!this.lastUpdateTime) this.lastUpdateTime = {};
+        const now = Date.now();
 
         const currentIds = sensores.map(s => `row-${s.n}`);
         Array.from(tbody.children).forEach(tr => {
@@ -100,9 +104,46 @@ const ConfigWidget = {
 
         sensores.forEach(sensor => {
             let tr = document.getElementById(`row-${sensor.n}`);
-            const valorActual = parseFloat(sensor.val).toFixed(1);
-            const esAlerta = valorActual > parseFloat(sensor.lh) || valorActual < parseFloat(sensor.ll);
-            const colorTexto = esAlerta ? 'text-red-500 font-black animate-pulse' : 'text-green-400';
+            const isDisconnected = document.getElementById('plc-status-text')?.innerText.includes('DESCONECTADO');
+            const valorNum = parseFloat(sensor.val);
+            const valorActual = isNaN(valorNum) ? 0 : valorNum;
+            let esAlerta = false;
+            let colorTexto = 'text-green-400';
+            let displayValue = valorActual.toFixed(1);
+
+            if (isDisconnected) {
+                displayValue = '--';
+                colorTexto = 'text-gray-500 font-black';
+            } else {
+                esAlerta = valorActual > parseFloat(sensor.lh) || valorActual < parseFloat(sensor.ll);
+                colorTexto = esAlerta ? 'text-red-500 font-black animate-pulse' : 'text-gray-300';
+            }
+
+            // --- 1. DATA QUALITY & SPARKLINE LOGIC ---
+            if (!this.sensorHistory[sensor.n]) this.sensorHistory[sensor.n] = Array(20).fill(valorActual);
+            const hist = this.sensorHistory[sensor.n];
+            
+            // Si cambió el valor, actualizamos el timestamp
+            if (hist[hist.length - 1] !== valorActual) {
+                this.lastUpdateTime[sensor.n] = now;
+            }
+            hist.push(valorActual);
+            if (hist.length > 20) hist.shift();
+
+            // Calidad del Dato
+            const timeSinceChange = now - (this.lastUpdateTime[sensor.n] || now);
+            let qualityClass = "bg-gray-500 shadow-none"; // Fresco (Normal)
+            if (timeSinceChange > 60000) qualityClass = "bg-yellow-500 shadow-[0_0_5px_#eab308]"; // Stale (+60s congelado)
+            if (isNaN(valorNum)) qualityClass = "bg-red-500 shadow-[0_0_5px_#ef4444]"; // Bad
+            if (isDisconnected) qualityClass = "bg-gray-500 shadow-none";
+
+            // Sparkline SVG
+            const sMax = Math.max(...hist) * 1.1 || 1;
+            const sMin = Math.min(...hist) * 0.9 || 0;
+            const sRange = (sMax - sMin) || 1;
+            const pts = hist.map((v, i) => `${i * 2.5},${20 - ((v - sMin) / sRange * 20)}`).join(' ');
+            const sparkline = isDisconnected ? '' : `<svg width="50" height="20" class="inline-block ml-3 opacity-60"><polyline points="${pts}" fill="none" stroke="${esAlerta ? '#ef4444' : '#3b82f6'}" stroke-width="1.5"/></svg>`;
+
 
             if (!tr) {
                 tr = document.createElement('tr');
@@ -110,13 +151,18 @@ const ConfigWidget = {
                 tr.className = "text-[10px] uppercase tracking-widest text-gray-400 border-b border-white/5 hover:bg-white/5 transition-colors";
                 
                 tr.innerHTML = `
-                    <td class="p-4 flex items-center gap-2">
-                        <span class="w-2 h-2 rounded-full ${esAlerta ? 'bg-red-500 animate-pulse' : 'bg-green-500'} indicator-dot"></span>
+                    <td class="p-4 flex items-center gap-3">
+                        <div class="relative flex items-center justify-center" title="Data Quality">
+                            <span class="w-2.5 h-2.5 rounded-full ${qualityClass}"></span>
+                            ${esAlerta ? `<span class="absolute w-4 h-4 rounded-full bg-red-500/50 animate-ping"></span>` : ''}
+                        </div>
                         <span class="font-black text-white">${sensor.n}</span>
                     </td>
                     <td class="p-4 font-mono text-[9px]">${sensor.protocolo || 'S7'} | ${sensor.id}</td>
-                    <td class="p-4">
-                        <span class="valor-vivo text-lg ${colorTexto}">${valorActual}</span> <span class="text-[8px]">${sensor.u || ''}</span>
+                    <td class="p-4 flex items-center">
+                        <span class="valor-vivo text-lg ${colorTexto} min-w-[3rem]">${displayValue}</span>
+                        <span class="text-[8px] text-gray-500 mr-2">${sensor.u || ''}</span>
+                        ${sparkline}
                     </td>
                     <td class="p-4">
                         <input type="number" value="${sensor.ll}" onchange="ConfigWidget.updateLimit('${sensor.n}', this.value, 'bajo')" 
@@ -127,6 +173,7 @@ const ConfigWidget = {
                             class="w-16 bg-black/40 border border-red-500/30 text-red-500 p-1.5 rounded-lg text-center outline-none focus:border-red-500 font-bold">
                     </td>
                     <td class="p-4 text-right whitespace-nowrap">
+                        <button onclick="TelecontrolWidget.abrir('${sensor.n}', '${sensor.m}')" class="text-purple-500 hover:text-white bg-purple-500/10 hover:bg-purple-600 px-3 py-1.5 rounded-lg transition-all font-bold tracking-widest text-[8px] mr-1">WRITE</button>
                         <button onclick="HistorialWidget.abrir('${sensor.n}')" class="text-green-500 hover:text-white bg-green-500/10 hover:bg-green-600 px-3 py-1.5 rounded-lg transition-all font-bold tracking-widest text-[8px] mr-1">CHART</button>
                         <button onclick="ConfigWidget.abrirEdicion('${sensor.n}')" class="text-blue-500 hover:text-white bg-blue-500/10 hover:bg-blue-600 px-3 py-1.5 rounded-lg transition-all font-bold tracking-widest text-[8px] mr-1">EDITAR</button>
                         <button onclick="ConfigWidget.eliminar('${sensor.n}')" class="text-red-500 hover:text-white bg-red-500/10 hover:bg-red-600 px-3 py-1.5 rounded-lg transition-all font-bold tracking-widest text-[8px]">BORRAR</button>
@@ -134,13 +181,36 @@ const ConfigWidget = {
                 `;
                 tbody.appendChild(tr);
             } else {
-                const indicator = tr.querySelector('.indicator-dot');
-                const valSpan = tr.querySelector('.valor-vivo');
-                if (indicator) indicator.className = `w-2 h-2 rounded-full ${esAlerta ? 'bg-red-500 animate-pulse shadow-[0_0_10px_red]' : 'bg-green-500'} indicator-dot`;
-                if (valSpan) {
-                    valSpan.className = `valor-vivo text-lg transition-colors ${colorTexto}`;
-                    valSpan.innerText = valorActual;
-                }
+                // Actualización rápida reconstruyendo las celdas principales
+                tr.innerHTML = `
+                    <td class="p-4 flex items-center gap-3">
+                        <div class="relative flex items-center justify-center" title="Data Quality">
+                            <span class="w-2.5 h-2.5 rounded-full ${qualityClass}"></span>
+                            ${esAlerta ? `<span class="absolute w-4 h-4 rounded-full bg-red-500/50 animate-ping"></span>` : ''}
+                        </div>
+                        <span class="font-black text-white">${sensor.n}</span>
+                    </td>
+                    <td class="p-4 font-mono text-[9px]">${sensor.protocolo || 'S7'} | ${sensor.id}</td>
+                    <td class="p-4 flex items-center">
+                        <span class="valor-vivo text-lg ${colorTexto} min-w-[3rem]">${displayValue}</span>
+                        <span class="text-[8px] text-gray-500 mr-2">${sensor.u || ''}</span>
+                        ${sparkline}
+                    </td>
+                    <td class="p-4">
+                        <input type="number" value="${sensor.ll}" onchange="ConfigWidget.updateLimit('${sensor.n}', this.value, 'bajo')" 
+                            class="w-16 bg-black/40 border border-blue-500/30 text-blue-400 p-1.5 rounded-lg text-center outline-none focus:border-blue-500 font-bold">
+                    </td>
+                    <td class="p-4">
+                        <input type="number" value="${sensor.lh}" onchange="ConfigWidget.updateLimit('${sensor.n}', this.value, 'alto')" 
+                            class="w-16 bg-black/40 border border-red-500/30 text-red-500 p-1.5 rounded-lg text-center outline-none focus:border-red-500 font-bold">
+                    </td>
+                    <td class="p-4 text-right whitespace-nowrap">
+                        <button onclick="TelecontrolWidget.abrir('${sensor.n}', '${sensor.m}')" class="text-purple-500 hover:text-white bg-purple-500/10 hover:bg-purple-600 px-3 py-1.5 rounded-lg transition-all font-bold tracking-widest text-[8px] mr-1">WRITE</button>
+                        <button onclick="HistorialWidget.abrir('${sensor.n}')" class="text-green-500 hover:text-white bg-green-500/10 hover:bg-green-600 px-3 py-1.5 rounded-lg transition-all font-bold tracking-widest text-[8px] mr-1">CHART</button>
+                        <button onclick="ConfigWidget.abrirEdicion('${sensor.n}')" class="text-blue-500 hover:text-white bg-blue-500/10 hover:bg-blue-600 px-3 py-1.5 rounded-lg transition-all font-bold tracking-widest text-[8px] mr-1">EDITAR</button>
+                        <button onclick="ConfigWidget.eliminar('${sensor.n}')" class="text-red-500 hover:text-white bg-red-500/10 hover:bg-red-600 px-3 py-1.5 rounded-lg transition-all font-bold tracking-widest text-[8px]">BORRAR</button>
+                    </td>
+                `;
             }
         });
     },
@@ -160,11 +230,17 @@ const ConfigWidget = {
             nodo_id: document.getElementById('sensor-nodo-id').value
         };
 
-        if (!payload.n || !payload.id) return alert("⚠️ Faltan datos clave (Nombre o ID)");
+        if (!payload.n || !payload.id) {
+            if (typeof UIUtils !== 'undefined') UIUtils.showToast("Faltan datos clave (Nombre o ID)", 'error');
+            else alert("⚠️ Faltan datos clave (Nombre o ID)");
+            return;
+        }
 
         // 1. Decidimos a qué ruta enviar (Crear vs Editar)
         const ruta = this.modoEdicion ? '/api/admin/editar_sensor' : '/api/admin/config_sensores';
         if (this.modoEdicion) payload.original_n = this.nombreOriginalEditar;
+
+        if (typeof UIUtils !== 'undefined') UIUtils.setLoading('btn-save-node', true);
 
         try {
             const res = await fetch(ruta, {
@@ -176,17 +252,22 @@ const ConfigWidget = {
             
             if (data.status === 'success') {
                 document.getElementById('modal-agregar-sensor').classList.add('hidden');
+                if (typeof UIUtils !== 'undefined') UIUtils.showToast("Nodo guardado con éxito", 'success');
                 // Al editar, forzamos un borrado de la fila en el DOM para que se regenere limpia
                 if (this.modoEdicion) {
                     const row = document.getElementById(`row-${this.nombreOriginalEditar}`);
                     if (row) row.remove();
                 }
             } else {
-                alert("⛔ Error: " + data.error);
+                if (typeof UIUtils !== 'undefined') UIUtils.showToast(data.error || "Error al guardar", 'error');
+                else alert("⛔ Error: " + data.error);
             }
         } catch (e) {
             console.error(e);
-            alert("❌ Falla de red al registrar el nodo.");
+            if (typeof UIUtils !== 'undefined') UIUtils.showToast("Falla de red al registrar el nodo", 'error');
+            else alert("❌ Falla de red al registrar el nodo.");
+        } finally {
+            if (typeof UIUtils !== 'undefined') UIUtils.setLoading('btn-save-node', false);
         }
     },
 
@@ -213,5 +294,89 @@ const ConfigWidget = {
             });
             if (!res.ok) alert("⚠️ No se pudo actualizar el límite en la base de datos.");
         } catch (e) { console.error(e); }
+    }
+};
+
+/**
+ * WIDGET PARA TELECONTROL (ESCRITURA A PLC)
+ */
+const TelecontrolWidget = {
+    sensorActual: null,
+    
+    abrir(nombreSensor, tipoMetrica) {
+        this.sensorActual = nombreSensor;
+        document.getElementById('telecontrol-sensor').value = nombreSensor + " (" + (tipoMetrica || 'REAL') + ")";
+        document.getElementById('telecontrol-valor').value = '';
+        
+        const realInput = document.getElementById('telecontrol-real-input');
+        const boolInput = document.getElementById('telecontrol-bool-input');
+        const execBtn = document.getElementById('btn-telecontrol-exec');
+        
+        if (tipoMetrica === 'BOOL') {
+            if (realInput) realInput.classList.add('hidden');
+            if (boolInput) boolInput.classList.remove('hidden');
+            if (execBtn) execBtn.classList.add('hidden');
+        } else {
+            if (realInput) realInput.classList.remove('hidden');
+            if (boolInput) boolInput.classList.add('hidden');
+            if (execBtn) execBtn.classList.remove('hidden');
+        }
+
+        document.getElementById('modal-telecontrol').classList.remove('hidden');
+        if (tipoMetrica !== 'BOOL') {
+            setTimeout(() => document.getElementById('telecontrol-valor').focus(), 100);
+        }
+    },
+
+    async enviarComando() {
+        const valorRaw = document.getElementById('telecontrol-valor').value;
+        if (valorRaw === '') {
+            if (typeof UIUtils !== 'undefined') UIUtils.showToast("Ingresa un valor para enviar", 'error');
+            else alert("Ingresa un valor para enviar.");
+            return;
+        }
+
+        // HEURÍSTICA: Prevención de Errores (Validación de entrada)
+        if (isNaN(Number(valorRaw))) {
+            if (typeof UIUtils !== 'undefined') UIUtils.showToast("El valor debe ser numérico", 'error');
+            else alert("El valor debe ser numérico.");
+            return;
+        }
+
+        // HEURÍSTICA: Prevención de errores (Doble confirmación para acciones críticas)
+        if (!confirm(`⚠️ PRECAUCIÓN:\n¿Estás seguro de enviar el comando [ ${valorRaw} ] al activo ${this.sensorActual}?`)) {
+            return;
+        }
+        
+        const payload = {
+            sensor: this.sensorActual,
+            valor: valorRaw
+        };
+
+        if (typeof UIUtils !== 'undefined') UIUtils.setLoading('btn-telecontrol-exec', true);
+
+        try {
+            const res = await fetch('/api/telecontrol/escribir', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+
+            if (res.ok && data.status === 'success') {
+                document.getElementById('modal-telecontrol').classList.add('hidden');
+                if (typeof UIUtils !== 'undefined') UIUtils.showToast(`Comando exitoso: ${valorRaw}`, 'success');
+                else alert(`✅ Comando enviado exitosamente: [ ${valorRaw} ] a ${this.sensorActual}`);
+            } else {
+                if (typeof UIUtils !== 'undefined') UIUtils.showToast(data.error || "Error de Telecontrol", 'error');
+                else alert("⛔ Acceso Denegado o Error: " + (data.error || "Fallo desconocido"));
+            }
+        } catch (e) {
+            console.error(e);
+            if (typeof UIUtils !== 'undefined') UIUtils.showToast("Falla de red", 'error');
+            else alert("❌ Falla de red al intentar enviar el comando.");
+        } finally {
+            if (typeof UIUtils !== 'undefined') UIUtils.setLoading('btn-telecontrol-exec', false);
+        }
     }
 };

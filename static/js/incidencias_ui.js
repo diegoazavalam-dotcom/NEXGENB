@@ -2,6 +2,33 @@
  * MÓDULO VISUAL 3: LOG DE INCIDENCIAS (IncidenciasUI)
  * Panel derecho con Búsqueda en Vivo, Autocompletado, Paginación y Cierres.
  */
+const AudioAlarm = {
+    ctx: null, interval: null,
+    init() { if(!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)(); },
+    start() {
+        if(this.interval) return;
+        this.init();
+        if(this.ctx.state === 'suspended') this.ctx.resume();
+        this.interval = setInterval(() => {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(800, this.ctx.currentTime); // Tono agudo de alarma
+            osc.frequency.exponentialRampToValueAtTime(600, this.ctx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.1, this.ctx.currentTime); // Volumen bajo para no asustar
+            gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start();
+            osc.stop(this.ctx.currentTime + 0.2);
+        }, 1000);
+    },
+    stop() {
+        if(this.interval) clearInterval(this.interval);
+        this.interval = null;
+    }
+};
+
 const IncidenciasUI = {
     name: "IncidenciasUI",
     containerId: "log-incidencias-container",
@@ -29,7 +56,29 @@ const IncidenciasUI = {
             else badge.classList.remove('animate-pulse', 'text-red-500');
         }
 
+        // HOOK MODEL: Recompensa Variable (Salud del Sistema)
+        const healthBadge = document.getElementById('system-health');
+        if (healthBadge) {
+            let healthScore = 100 - (alertasVivas.length * 5);
+            if (healthScore < 0) healthScore = 0;
+            healthBadge.innerText = healthScore + "%";
+            
+            if (healthScore === 100) {
+                healthBadge.className = "text-2xl font-black text-green-500 drop-shadow-[0_0_8px_rgba(34,197,94,0.8)] transition-all duration-500";
+            } else if (healthScore > 50) {
+                healthBadge.className = "text-2xl font-black text-yellow-500 animate-pulse transition-all duration-500";
+            } else {
+                healthBadge.className = "text-2xl font-black text-red-500 animate-pulse transition-all duration-500";
+            }
+        }
+
         if (alertasVivas.length !== this.lastAlertCount) {
+            // HOOK MODEL: Recompensa Variable (Refuerzo Positivo al limpiar la planta)
+            if (this.lastAlertCount > 0 && alertasVivas.length === 0) {
+                if (typeof UIUtils !== 'undefined') {
+                    UIUtils.showToast("¡Excelente trabajo! Sistema 100% Optimizado y Estable.", "success");
+                }
+            }
             this.lastAlertCount = alertasVivas.length;
             this.sincronizarConBD();
         }
@@ -40,11 +89,16 @@ const IncidenciasUI = {
         this.isFetching = true;
 
         try {
-            const res = await fetch('/api/incidencias/pendientes', { credentials: 'include' });
+            const res = await fetch('/api/alarmas/isa182', { credentials: 'include' });
             if (res.ok) {
                 this.cacheIncidencias = await res.json();
                 this.actualizarAutocompletado();
                 this.render(); // Dibujamos la vista con filtros
+                
+                // Evaluar si debemos sonar la alarma auditiva
+                const hayCriticasUnack = this.cacheIncidencias.some(inc => inc.estado_ack === 'UNACK' && inc.prioridad === 'CRITICA');
+                if (hayCriticasUnack) AudioAlarm.start();
+                else AudioAlarm.stop();
             }
         } catch (e) {
             console.warn("⚠️ Esperando BD para incidencias.");
@@ -124,35 +178,52 @@ const IncidenciasUI = {
                     <p class="text-[9px] font-black uppercase tracking-[0.2em] text-blue-400">Sin coincidencias</p>
                 </div>`;
         } else {
-            // Lista de Tarjetas
             html += `<div class="space-y-3">`;
             html += itemsPagina.map(inc => {
                 const esAlto = inc.tipo === 'ALTO';
                 const hora = inc.fecha && inc.fecha.includes(' ') ? inc.fecha.split(' ')[1] : '--:--:--';
+                const esUnack = inc.estado_ack === 'UNACK';
+                const parpadeo = esUnack ? 'animate-pulse' : '';
+                const opacidad = esUnack ? '' : 'opacity-70';
+                
+                // Colores por prioridad
+                let colorPrioridad = 'text-blue-500 border-blue-500 bg-blue-500/10';
+                if (inc.prioridad === 'CRITICA') colorPrioridad = 'text-red-600 border-red-600 bg-red-600/10 font-black';
+                else if (inc.prioridad === 'ALTA') colorPrioridad = 'text-orange-500 border-orange-500 bg-orange-500/10';
+                else if (inc.prioridad === 'MEDIA') colorPrioridad = 'text-yellow-500 border-yellow-500 bg-yellow-500/10';
 
                 return `
-                <div class="glass-panel p-4 rounded-2xl border-l-4 ${esAlto ? 'border-red-500' : 'border-blue-500'} bg-white/5 animate-in fade-in">
+                <div class="glass-panel p-4 rounded-2xl border-l-4 ${colorPrioridad} ${parpadeo} ${opacidad} transition-all">
                     <div class="flex justify-between items-start mb-2">
                         <div class="flex flex-col">
-                            <span class="text-[10px] font-black text-white uppercase tracking-tighter">${inc.sensor_id}</span>
-                            <span class="text-[7px] font-bold text-red-500/80 uppercase tracking-widest">${inc.tipo} CRÍTICO</span>
+                            <span class="text-[12px] font-black text-white uppercase tracking-tighter">${inc.sensor_id}</span>
+                            <span class="text-[8px] font-bold ${colorPrioridad.split(' ')[0]} uppercase tracking-widest">${inc.prioridad} - ${inc.tipo}</span>
                         </div>
-                        <span class="text-[9px] font-mono text-gray-500 bg-black/40 px-2 py-1 rounded-md">${hora}</span>
+                        <div class="flex flex-col items-end">
+                            <span class="text-[9px] font-mono text-gray-500 bg-black/40 px-2 py-1 rounded-md">${hora}</span>
+                            ${!esUnack ? `<span class="text-[7px] text-green-400 mt-1">ACK por ${inc.usuario_ack}</span>` : ''}
+                        </div>
                     </div>
                     
                     <div class="bg-black/20 p-2 rounded-xl mb-3 border border-white/5">
-                        <p class="text-[10px] text-gray-400">Falla: <span class="text-white font-black">${inc.valor_detectado}</span></p>
+                        <p class="text-[11px] text-gray-400">Falla: <span class="text-white font-black">${inc.valor_detectado}</span></p>
                         <p class="text-[8px] text-gray-500 uppercase">Límite: ${inc.umbral_limite}</p>
                     </div>
 
                     <div class="flex gap-2">
+                        ${esUnack ? `
+                        <button onclick="IncidenciasUI.reconocer('${inc.id}')" 
+                            class="flex-[2] py-2 bg-green-500 hover:bg-green-400 text-black border border-green-400 rounded-xl text-[9px] font-black uppercase transition-all shadow-lg shadow-green-500/20">
+                            ACK (Reconocer)
+                        </button>` : `
                         <button onclick="IncidenciasUI.atender('${inc.id}')" 
-                            class="flex-1 py-2 bg-red-600/10 hover:bg-red-600 text-red-500 hover:text-white border border-red-500/20 rounded-xl text-[8px] font-black uppercase transition-all">
-                            Firmar 1
-                        </button>
-                        <button onclick="IncidenciasUI.atenderMasivo('${inc.sensor_id}')" 
-                            class="flex-1 py-2 bg-yellow-500/10 hover:bg-yellow-500 text-yellow-500 hover:text-white border border-yellow-500/20 rounded-xl text-[8px] font-black uppercase transition-all">
-                            Masivo
+                            class="flex-1 py-2 bg-blue-500/10 hover:bg-blue-500 text-blue-400 hover:text-white border border-blue-500/30 rounded-xl text-[8px] font-black uppercase transition-all">
+                            Cerrar
+                        </button>`}
+                        
+                        <button onclick="IncidenciasUI.aparcar('${inc.id}')" 
+                            class="flex-1 py-2 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white border border-white/10 rounded-xl text-[8px] font-black uppercase transition-all">
+                            Shelve
                         </button>
                     </div>
                 </div>`;
@@ -175,8 +246,54 @@ const IncidenciasUI = {
     },
 
     // --- ACCIONES CON LA BD ---
+    async reconocer(id_alarma) {
+        // Optimistic UI Update: Reflejar instantáneamente en la interfaz para máxima velocidad (UX)
+        const alarmaLocal = this.cacheIncidencias.find(i => i.id === id_alarma);
+        if (alarmaLocal) {
+            alarmaLocal.estado_ack = 'ACK';
+            alarmaLocal.usuario_ack = 'admin (local)';
+            this.render(); // Redibujar al instante para detener el parpadeo
+            AudioAlarm.stop(); // Detener sirena inmediatamente
+        }
+
+        try {
+            const res = await fetch('/api/alarmas/ack', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id_alarma })
+            });
+            if ((await res.json()).success) {
+                if (typeof UIUtils !== 'undefined') UIUtils.showToast("Alarma Reconocida (ACK)", 'success');
+                // Al terminar, sincronizamos silenciosamente con la fuente de la verdad
+                this.sincronizarConBD();
+            }
+        } catch (e) { 
+            if (typeof UIUtils !== 'undefined') UIUtils.showToast("Error de red en ACK", 'error'); 
+            this.sincronizarConBD(); // Revertir en caso de fallo
+        }
+    },
+
+    async aparcar(id_alarma) {
+        const horasStr = prompt("⏲️ SHELVING (ISA-18.2)\n¿Por cuántas horas deseas silenciar esta alarma?");
+        if (!horasStr) return;
+        const horas = parseFloat(horasStr);
+        if (isNaN(horas) || horas <= 0) return alert("Cantidad inválida");
+
+        try {
+            const res = await fetch('/api/alarmas/shelve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id_alarma, horas: horas })
+            });
+            if ((await res.json()).success) {
+                if (typeof UIUtils !== 'undefined') UIUtils.showToast(`Alarma aparcada por ${horas}h`, 'success');
+                this.sincronizarConBD();
+            }
+        } catch (e) { if (typeof UIUtils !== 'undefined') UIUtils.showToast("Error de red", 'error'); }
+    },
+
     async atender(id_incidencia) {
-        const comentario = prompt("🚨 FIRMA INDIVIDUAL\nAcción tomada:");
+        const comentario = prompt("🚨 CIERRE DE ALARMA\nResolución / Acción tomada:");
         if (!comentario || comentario.trim().length < 3) return;
         try {
             const res = await fetch('/api/incidencias/atender', {
@@ -184,26 +301,11 @@ const IncidenciasUI = {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id: id_incidencia, comentario: comentario.trim() })
             });
-            if ((await res.json()).success) this.sincronizarConBD();
-            else alert("⛔ Error en BD");
-        } catch (e) { alert("❌ Fallo de red"); }
-    },
-
-    async atenderMasivo(sensor_id) {
-        const comentario = prompt(`⚠️ CIERRE MASIVO ISO 9001\nSe cerrarán TODAS las alertas de: ${sensor_id}\n\nIndique la causa raíz general:`);
-        if (!comentario || comentario.trim().length < 3) return;
-        try {
-            const res = await fetch('/api/incidencias/atender_masivo', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sensor_id: sensor_id, comentario: comentario.trim() })
-            });
-            const data = await res.json();
-            if (data.success) {
-                alert(`✅ ${data.mensaje}`);
+            if ((await res.json()).success) {
+                if (typeof UIUtils !== 'undefined') UIUtils.showToast("Alarma cerrada", 'success');
                 this.sincronizarConBD();
-            } else alert("⛔ Error en cierre masivo.");
-        } catch (e) { alert("❌ Fallo de red"); }
+            }
+        } catch (e) { if (typeof UIUtils !== 'undefined') UIUtils.showToast("Fallo de red", 'error'); }
     }
 };
 

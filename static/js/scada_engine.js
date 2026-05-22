@@ -1,13 +1,11 @@
 /**
- * SCADA ENGINE V7.5 - El Motor Central
- * Se encarga única y exclusivamente de traer los datos y repartirlos.
- * No toca el HTML, no dibuja nada (excepto contadores globales). Solo es el "corazón" del sistema.
+ * SCADA ENGINE V7.5 - El Motor Central (WEBSOCKETS EDITION)
+ * Recibe datos del servidor instantáneamente sin hacer polling continuo.
  */
 const ScadaEngine = {
-    intervalo: 1000, // 1 segundo (1000 milisegundos)
-    timer: null,
-    subscriptores: [], // Aquí guardaremos qué módulos quieren recibir datos
-    isActive: true, // Control para saber si la pestaña está visible
+    subscriptores: [],
+    isActive: true,
+    socket: null,
 
     // 1. Método para conectar un módulo al motor
     suscribir(modulo) {
@@ -19,63 +17,31 @@ const ScadaEngine = {
         }
     },
 
-    // 2. El latido del corazón: Trae los datos
-    async tick() {
-        // Si la pestaña no está visible, no hacemos peticiones (Ahorro de RAM/Red)
+    // 2. Repartidor de datos
+    distribuir(data) {
         if (!this.isActive) return;
 
-        try {
-            // Hacemos la petición a la API que ya tienes en app.py
-            const response = await fetch('/api/telemetria', {
-                credentials: 'include' // Asegura que la cookie de sesión (login) viaje
-            });
-
-            // Si el servidor responde 401 (Sesión expirada), forzamos recarga
-            if (response.status === 401) {
-                console.warn("⚠️ Sesión bloqueada. Deteniendo motor para evitar bucle.");
-                this.detener(); // <--- IMPORTANTE: Esto apaga el timer
-                
-                // Solo mostramos el login, NO recargamos
-                if (window.AuthWidget) {
-                    window.AuthWidget.gestionarUI(false, null);
-                }
-                return;
-            }
-
-            const data = await response.json();
-
-            if (data.status === 'ok' && data.sensores) {
-                // MODIFICACIÓN: Pasamos TODO el objeto de datos, no solo los sensores
-                this.distribuir(data);
-            }
-        } catch (error) {
-            console.error("⚠️ Error de red en el latido del SCADA:", error);
-        }
-    },
-
-    // 3. Repartidor de datos
-distribuir(data) {
         const sensores = data.sensores || [];
         const totalIncidencias = data.total_incidencias || 0;
 
-        // 2. Actualizamos contador global de sensores
+        // Actualizamos contador global de sensores
         const badgeSensores = document.getElementById('count-sensores');
         if (badgeSensores) badgeSensores.innerText = sensores.length;
 
-        // 3. --- AQUÍ ESTÁ EL CAMBIO: Usamos 'count-alertas' en lugar de 'badge-incidencias' ---
+        // Actualizamos alertas
         const badgeIncidencias = document.getElementById('count-alertas'); 
         if (badgeIncidencias) {
             badgeIncidencias.innerText = totalIncidencias;
             
             // Efecto visual dinámico
             if (totalIncidencias > 0) {
-                badgeIncidencias.classList.add('animate-pulse'); // Mantenemos el rojo que ya tiene tu HTML
+                badgeIncidencias.classList.add('animate-pulse');
             } else {
                 badgeIncidencias.classList.remove('animate-pulse');
             }
         }
 
-        // 4. Repartimos a HMI_Logic
+        // Repartimos a los sub-módulos
         this.subscriptores.forEach(modulo => {
             try {
                 modulo.update(sensores);
@@ -85,40 +51,52 @@ distribuir(data) {
         });
     },
 
-    // 4. Inteligencia de visibilidad (Ahorro de energía)
+    // 3. Inteligencia de visibilidad (Ahorro de energía)
     iniciarControlEnergia() {
         document.addEventListener("visibilitychange", () => {
             if (document.hidden) {
                 this.isActive = false;
-                console.log("⏸️ SCADA en pausa (Pestaña oculta)");
+                console.log("⏸️ SCADA en pausa visual (Pestaña oculta)");
             } else {
                 this.isActive = true;
-                console.log("▶️ SCADA reactivado");
-                this.tick(); // Forzamos un latido inmediato al volver
+                console.log("▶️ SCADA visualmente reactivado");
             }
         });
     },
 
-    // 5. Encendido del motor
+    // 4. Encendido del motor
     iniciar() {
-        if (this.timer) return; // Evita que se inicie dos veces
+        if (this.socket) return;
         
-        console.log("🚀 Motor SCADA Iniciado.");
+        console.log("🚀 Motor SCADA Iniciado en modo WebSocket.");
         this.iniciarControlEnergia();
         
-        // Arrancamos el ciclo infinito
-        this.timer = setInterval(() => this.tick(), this.intervalo);
-        
-        // Hacemos un primer latido inmediato para no esperar 1 segundo
-        this.tick();
+        // Asume que la librería socket.io fue inyectada en el HTML
+        if (typeof io !== 'undefined') {
+            this.socket = io();
+            
+            this.socket.on('connect', () => {
+                console.log('🟢 Conectado al Gateway SCADA en tiempo real');
+            });
+
+            this.socket.on('telemetria_update', (data) => {
+                this.distribuir(data);
+            });
+
+            this.socket.on('disconnect', () => {
+                console.warn('🔴 Desconectado del Gateway SCADA');
+            });
+        } else {
+            console.error("❌ Librería Socket.IO no encontrada. Revisa tu HTML.");
+        }
     },
 
-    // 6. Apagado del motor (Útil para cuando cierras sesión)
+    // 5. Apagado del motor (Útil para cuando cierras sesión)
     detener() {
-        if (this.timer) {
-            clearInterval(this.timer);
-            this.timer = null;
-            console.log("🛑 Motor SCADA Detenido.");
+        if (this.socket) {
+            this.socket.disconnect();
+            this.socket = null;
+            console.log("🛑 Motor SCADA Desconectado.");
         }
     }
 };

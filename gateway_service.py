@@ -1,0 +1,95 @@
+import eventlet
+eventlet.monkey_patch()
+
+import sys
+import io
+if sys.stdout is None or not hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout = io.StringIO()
+    sys.stderr = io.StringIO()
+else:
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
+from flask import Flask, request, jsonify
+from sensor_gateway import SensorGateway
+import database
+import os
+
+app_gtw = Flask(__name__)
+# Leemos modo produccion desde env
+MODO_PRODUCCION = os.environ.get('FLASK_ENV') == 'production'
+
+# Instanciamos el Gateway de forma independiente
+gateway = SensorGateway(modo_produccion=MODO_PRODUCCION)
+# Le decimos que empuje los datos a la API del Web Server por TLS (localhost)
+gateway.webhook_url = "https://127.0.0.1:5005/api/internal/telemetry_broadcast"
+
+# Cargamos configuración inicial
+sensores_db = database.leer_configuracion_sensores()
+gateway.cargar_configuracion(sensores_db)
+gateway.start()
+
+@app_gtw.route('/reload_config', methods=['POST'])
+def reload_config():
+    """Llamado por app.py cuando el Admin agrega o mueve un widget"""
+    sensores_db = database.leer_configuracion_sensores()
+    gateway.cargar_configuracion(sensores_db)
+    return jsonify({"status": "ok"})
+
+@app_gtw.route('/write', methods=['POST'])
+def write_plc():
+    """Llamado por app.py cuando un usuario opera un switch"""
+    d = request.json
+    exito = gateway.escribir_valor(d.get('sensor'), d.get('valor'))
+    return jsonify({"success": exito})
+
+@app_gtw.route('/read', methods=['POST'])
+def read_plc():
+    """Llamado por app.py para leer offsets dinámicos (Ej. Extractores)"""
+    try:
+        d = request.json
+        db_num = int(d.get('db'))
+        offset = float(d.get('offset'))
+        tipo = d.get('tipo', 'BOOL')
+        
+        # Leemos desde el primer driver disponible (S7)
+        if gateway.drivers:
+            driver = list(gateway.drivers.values())[0]
+            val = driver.leer_sensor(db_num, offset, tipo)
+            return jsonify({"val": val})
+        return jsonify({"val": None})
+    except:
+        return jsonify({"val": None})
+
+@app_gtw.route('/write_sensor', methods=['POST'])
+def write_sensor():
+    """Llamado por app.py para escribir offsets dinámicos (Ej. Extractores)"""
+    try:
+        d = request.json
+        db_num = int(d.get('db'))
+        offset = float(d.get('offset'))
+        tipo = d.get('tipo', 'BOOL')
+        valor = d.get('valor')
+        
+        # Escribimos usando el primer driver disponible
+        if gateway.drivers:
+            driver = list(gateway.drivers.values())[0]
+            exito = driver.escribir_sensor(db_num, offset, tipo, valor)
+            return jsonify({"success": exito})
+        return jsonify({"success": False})
+    except:
+        return jsonify({"success": False})
+
+@app_gtw.route('/status', methods=['GET'])
+def get_status():
+    return jsonify({
+        "alive": gateway.get_connection_status(),
+        "drivers_count": len(gateway.drivers)
+    })
+
+if __name__ == '__main__':
+    print("🔌 Iniciando Microservicio de Telemetría S7 (Independiente)")
+    app_gtw.run(host='127.0.0.1', port=5006, debug=False)
